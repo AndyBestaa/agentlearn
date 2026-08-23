@@ -25,6 +25,7 @@ from .security import (
     sha256_hex,
 )
 from .tools.base import ToolResult as HostToolResult
+from .tools.filesystem import parse_patch
 from .tools.registry import ToolRegistry
 
 
@@ -903,6 +904,10 @@ class LocalToolGateway:
         checked_cwd = canonicalize_authorized_path(raw_cwd, roots, must_exist=True, reject_unc=self.policy.config.security.reject_unc_paths)
         effective_cwd = str(checked_cwd.resolved)
         arguments = dict(call.arguments)
+        if call.tool == "fs.apply_patch" and isinstance(arguments.get("patch"), str):
+            arguments["patch"] = self._normalize_update_patch_separators(
+                str(arguments["patch"]), effective_cwd
+            )
         if call.tool.startswith("fs."):
             path_rules = {
                 "fs.list": {"path": False},
@@ -916,6 +921,21 @@ class LocalToolGateway:
             for key, must_exist in path_rules.items():
                 value = arguments.get(key)
                 if isinstance(value, str):
+                    if call.tool in {
+                        "fs.list",
+                        "fs.stat",
+                        "fs.read",
+                        "fs.search",
+                    }:
+                        # A live model may express the abstract workspace root
+                        # as an empty string or a container-style marker. The
+                        # model has no host path authority, so map only these
+                        # exact markers for read-only tools. Never do this for
+                        # writes, moves or deletes: a blank destructive target
+                        # must continue to fail closed.
+                        marker = value.strip().replace("\\", "/").rstrip("/")
+                        if marker in {"", "/", "/workspace", "workspace"}:
+                            value = effective_cwd
                     checked = canonicalize_authorized_path(
                         value, roots, cwd=effective_cwd, must_exist=must_exist, reject_unc=self.policy.config.security.reject_unc_paths
                     )
@@ -923,6 +943,72 @@ class LocalToolGateway:
         elif call.tool.startswith("git.") or call.tool in {"process.exec", "process.start", "shell.exec"}:
             arguments["cwd"] = effective_cwd
         return call.model_copy(update={"cwd": effective_cwd, "arguments": arguments})
+
+    def _normalize_update_patch_separators(self, patch: str, cwd: str) -> str:
+        """Repair one unambiguous model formatting variant for update patches.
+
+        Some models emit ``- old``/``+ new`` although AsterCode's exact patch
+        grammar uses ``-old``/``+new``.  The host may remove that one separator
+        only when the original old context fails and the repaired old context
+        matches every authorized target exactly.  Adds and ambiguous updates
+        are left untouched and fail closed in normal policy validation.
+        """
+
+        try:
+            changes = parse_patch(patch)
+            updates = [(path, old) for path, old, _new in changes if old is not None]
+            if not updates:
+                return patch
+
+            roots = self.policy.config.security.authorized_roots
+
+            def contexts_match(items: list[tuple[str, str | None, str]]) -> bool:
+                found_update = False
+                for path_text, old, _new in items:
+                    if old is None:
+                        continue
+                    found_update = True
+                    checked = canonicalize_authorized_path(
+                        path_text,
+                        roots,
+                        cwd=cwd,
+                        must_exist=True,
+                        reject_unc=self.policy.config.security.reject_unc_paths,
+                    )
+                    raw = checked.resolved.read_bytes()
+                    encoding = "utf-8-sig" if raw.startswith(b"\xef\xbb\xbf") else "utf-8"
+                    current = raw.decode(encoding).replace("\r\n", "\n")
+                    if old.replace("\r\n", "\n") not in current:
+                        return False
+                return found_update
+
+            if contexts_match(changes):
+                return patch
+
+            repaired_lines: list[str] = []
+            in_update = False
+            for line in patch.splitlines():
+                if line.startswith("*** Update File:"):
+                    in_update = True
+                elif line.startswith(("*** Add File:", "*** Delete File:")):
+                    in_update = False
+                elif line == "*** End Patch":
+                    in_update = False
+                if (
+                    in_update
+                    and len(line) >= 3
+                    and line[0] in {"-", "+"}
+                    and line[1] == " "
+                    and line[2] != " "
+                ):
+                    line = line[0] + line[2:]
+                repaired_lines.append(line)
+            repaired = "\n".join(repaired_lines)
+            if patch.endswith("\n"):
+                repaired += "\n"
+            return repaired if contexts_match(parse_patch(repaired)) else patch
+        except (OSError, UnicodeError, ValueError, PathAuthorizationError):
+            return patch
 
 
 __all__ = ["LocalToolGateway"]

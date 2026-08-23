@@ -242,7 +242,7 @@ def _steps(target_name: str) -> list[Step]:
         ),
         Step(
             "cycle1-create",
-            f'Create only {target_name} with exactly two lines: VALUE = "cycle1" and print(VALUE). Use fs.apply_patch exactly once. After it succeeds, make no more tool calls and report completion; the host test will verify the bytes. Do not run code.',
+            f'First call git.status exactly once to inspect this non-Git workspace. Treat its expected failure as an observation and continue in the same turn. Then create only {target_name} with exactly two lines: VALUE = "cycle1" and print(VALUE). Use fs.apply_patch exactly once. After it succeeds, make no more tool calls and report completion; the host test will verify the bytes. Do not run code.',
             "fs.apply_patch",
             content("cycle1"),
             "P1",
@@ -297,6 +297,8 @@ def main() -> int:
         raise RuntimeError("--target must be one plain filename")
     target = root / args.target
     database = root / ".astercode" / "astercode.db"
+    if (root / ".git").exists() or (root / ".git").is_symlink():
+        raise RuntimeError("live non-Git recovery smoke requires a workspace without .git")
     is_junction = bool(getattr(target, "is_junction", lambda: False)())
     if os.path.lexists(target) or is_junction:
         raise RuntimeError(f"refusing to overwrite pre-existing test target: {target}")
@@ -493,8 +495,9 @@ def main() -> int:
         )
         side_effect_action_ids = [
             str(action_id)
-            for _turn_id, _call_id, action_id, tool, _arguments_json, _status in calls
+            for _turn_id, _call_id, action_id, tool, _arguments_json, status in calls
             if str(tool) in {"fs.apply_patch", "fs.delete"}
+            and str(status) == "completed"
         ]
         requested_counts = {
             str(action_id): int(count)
@@ -531,26 +534,70 @@ def main() -> int:
     if row is None or str(row[0]) != "completed" or not _same_path(str(row[1]), root):
         raise RuntimeError(f"final session status is not completed: {row!r}")
     final_state = json.loads(str(row[2]))
-    failed = [tuple(item) for item in calls if str(item[5]) != "completed"]
-    if failed:
-        raise RuntimeError(f"persisted non-completed tool calls: {failed}")
+    rejected = [tuple(item) for item in calls if str(item[5]) == "policy_check"]
+    rejected_results = {
+        str(item.get("call_id")): item
+        for item in final_state.get("tool_results", [])
+        if str(item.get("status")) == "cancelled"
+        and not item.get("side_effects")
+        and str((item.get("error") or {}).get("message"))
+        == "policy validation failed (ValueError)"
+    }
+    if len(rejected) > 6 or {
+        str(item[1]) for item in rejected
+    } != set(rejected_results):
+        raise RuntimeError(
+            "non-executed proposals were not bounded, stale, side-effect-free "
+            f"policy rejections: {rejected}"
+        )
+    executed_calls = [tuple(item) for item in calls if str(item[5]) != "policy_check"]
+    failed = [item for item in executed_calls if str(item[5]) != "completed"]
+    if (
+        len(failed) != 1
+        or str(failed[0][3]) != "git.status"
+        or str(failed[0][5]) != "failed"
+    ):
+        raise RuntimeError(
+            f"expected exactly one recoverable git.status failure: {failed}"
+        )
+    significant_calls = [
+        item
+        for item in executed_calls
+        if str(item[3]) == "git.status"
+        or (
+            str(item[3]) in {"fs.apply_patch", "fs.delete"}
+            and str(item[5]) == "completed"
+        )
+    ]
     call_tools = [
         str(tool)
-        for _turn_id, _call_id, _action_id, tool, _arguments_json, _status in calls
+        for _turn_id, _call_id, _action_id, tool, _arguments_json, _status in significant_calls
     ]
     expected_calls = [
+        "git.status",
         "fs.apply_patch",
         "fs.apply_patch",
         "fs.delete",
-    ] * 2
+        "fs.apply_patch",
+        "fs.apply_patch",
+        "fs.delete",
+    ]
     if call_tools != expected_calls:
         raise RuntimeError(f"unexpected exact tool-call sequence: {call_tools}")
-    call_turns = [str(turn_id) for turn_id, *_rest in calls]
+    call_turns = [str(turn_id) for turn_id, *_rest in significant_calls]
     call_ids = [str(call_id) for _turn_id, call_id, *_rest in calls]
     if len(set(call_ids)) != len(call_ids):
         raise RuntimeError(f"tool call IDs were not unique: {call_ids}")
-    if len(call_turns) != 6 or len(set(call_turns)) != 6:
-        raise RuntimeError(f"tools were not isolated to six operation turns: {call_turns}")
+    if (
+        len(call_turns) != 7
+        or len(set(call_turns)) != 6
+        or call_turns[0] != call_turns[1]
+        or len(set(call_turns[1:])) != 6
+    ):
+        raise RuntimeError(
+            "git.status and the first patch must share one turn, while the six "
+            f"side effects remain isolated: {call_turns}"
+        )
     for _turn_id, _call_id, _action_id, tool, arguments_json, _status in calls:
         arguments = json.loads(str(arguments_json))
         if str(tool) == "fs.read":
@@ -567,8 +614,9 @@ def main() -> int:
                 raise RuntimeError(f"list escaped the non-recursive workspace root: {arguments}")
     side_effects = [
         str(tool)
-        for _turn_id, _call_id, _action_id, tool, _arguments_json, _status in calls
+        for _turn_id, _call_id, _action_id, tool, _arguments_json, status in calls
         if str(tool) in {"fs.apply_patch", "fs.delete"}
+        and str(status) == "completed"
     ]
     expected_side_effects = [
         "fs.apply_patch",

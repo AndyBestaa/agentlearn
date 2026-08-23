@@ -340,9 +340,23 @@ class SSHSecurityConfig(ConfigModel):
 
 
 class ProcessSecurityConfig(ConfigModel):
-    sandbox_backend: SandboxBackend = SandboxBackend.NONE
+    # The convenience CLI asks for a verified container boundary by default.
+    # Hosts without Docker or the configured local image still fail closed.
+    sandbox_backend: SandboxBackend = SandboxBackend.CONTAINER
     allow_unsandboxed_process: bool = False
     clean_path: list[Path] = Field(default_factory=list)
+    container_image: str = (
+        "mirror.gcr.io/library/python@"
+        "sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a"
+    )
+    container_cpus: float = Field(default=1.0, gt=0, le=64)
+    container_tmpfs_bytes: int = Field(
+        default=67_108_864, ge=1_048_576, le=4_294_967_296
+    )
+    container_workspace_bytes: int = Field(
+        default=536_870_912, ge=16_777_216, le=17_179_869_184
+    )
+    container_user: str = "65534:65534"
     max_output_bytes: int = Field(default=1_048_576, ge=1_024, le=1_073_741_824)
     default_timeout_seconds: float = Field(default=120.0, gt=0, le=86_400)
     max_timeout_seconds: float = Field(default=3_600.0, gt=0, le=604_800)
@@ -354,12 +368,32 @@ class ProcessSecurityConfig(ConfigModel):
         default=600.0, ge=0.01, le=604_800
     )
 
+    @field_validator("container_image")
+    @classmethod
+    def validate_container_image(cls, value: str) -> str:
+        candidate = value.strip()
+        if (
+            not candidate
+            or len(candidate) > 512
+            or candidate.startswith("-")
+            or any(char.isspace() or ord(char) < 32 for char in candidate)
+        ):
+            raise ValueError("container_image must be a bounded image reference")
+        return candidate
+
+    @field_validator("container_user")
+    @classmethod
+    def validate_container_user(cls, value: str) -> str:
+        candidate = value.strip()
+        if not re.fullmatch(r"[0-9]{1,10}:[0-9]{1,10}", candidate):
+            raise ValueError("container_user must be a numeric uid:gid pair")
+        return candidate
+
     @property
     def has_enforced_sandbox(self) -> bool:
-        # Backend names are configuration intent, not proof that this host
-        # has an active isolation boundary.  AsterCode currently ships no
-        # verified Windows/Linux sandbox adapter, so every configured backend
-        # remains fail-closed until a runtime adapter reports verification.
+        # Backend names are configuration intent, not runtime proof.  The
+        # Docker adapter separately resolves an immutable image digest and
+        # runs active filesystem/network probes before reporting attestation.
         return False
 
 

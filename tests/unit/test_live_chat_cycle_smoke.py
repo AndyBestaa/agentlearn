@@ -23,6 +23,7 @@ def _load_live_smoke() -> Any:
 _LIVE_SMOKE = _load_live_smoke()
 Step = _LIVE_SMOKE.Step
 _validate_approval = _LIVE_SMOKE._validate_approval
+_steps = _LIVE_SMOKE._steps
 
 
 def _patch_request(root: Path, target: Path, patch: str) -> dict[str, object]:
@@ -85,3 +86,10 @@ def test_live_smoke_rejects_a_patch_for_a_different_path(tmp_path: Path) -> None
             root=tmp_path,
             target=target,
         )
+
+
+def test_live_smoke_first_create_exercises_non_git_recovery() -> None:
+    steps = _steps("chat_cycle.py")
+    first_create = next(step for step in steps if step.name == "cycle1-create")
+    assert "git.status exactly once" in first_create.prompt
+    assert "expected failure as an observation" in first_create.prompt

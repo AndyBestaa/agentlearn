@@ -21,7 +21,7 @@ from .base import ToolResult, ToolSpec, new_action_id, timed_result
 
 class FilesystemTools:
     specs = (
-        ToolSpec("fs.list", "List entries under an authorized directory.", "filesystem.read", max_output=16_000, schema={"type": "object", "properties": {"path": {"type": "string"}, "recursive": {"type": "boolean"}}, "required": ["path", "recursive"], "additionalProperties": False}),
+        ToolSpec("fs.list", "List entries under an authorized directory. Use path '.' for the current workspace root; never guess an absolute host path.", "filesystem.read", max_output=16_000, schema={"type": "object", "properties": {"path": {"type": "string"}, "recursive": {"type": "boolean"}}, "required": ["path", "recursive"], "additionalProperties": False}),
         ToolSpec("fs.stat", "Read metadata for an authorized path.", "filesystem.read", max_output=8_000, schema={"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}),
         ToolSpec("fs.read", "Read bounded UTF-8 text from an authorized file.", "filesystem.read", max_output=32_000, schema={"type": "object", "properties": {"path": {"type": "string"}, "start_line": {"type": "integer", "minimum": 1}, "end_line": {"type": ["integer", "null"], "minimum": 1}}, "required": ["path", "start_line", "end_line"], "additionalProperties": False}),
         ToolSpec("fs.search", "Search authorized files with ripgrep when available.", "filesystem.read", max_output=32_000, schema={"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}, "max_results": {"type": "integer", "minimum": 1, "maximum": 1000}}, "required": ["pattern", "path", "max_results"], "additionalProperties": False}),

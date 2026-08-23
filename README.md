@@ -2,7 +2,7 @@
 
 AsterCode 是一个基于 LangGraph 的本地优先编程代理原型。模型只能提出结构化工具调用；路径校验、权限分级、审批、执行、审计和恢复由宿主程序完成。它不是 Claude Code 的私有实现或品牌复制品。
 
-当前版本的重点仍是**不设置 API key 也能运行的离线垂直链路**：Fake Provider、文件/Git 工具、审批与恢复、SQLite WAL/FTS5、Fake SSH、Fake Browser、Fake MCP/Plugin、只读子代理、流式事件和 replay 都可以用自动化测试验证。Windows 本地进程已有实机验证的 Job Object **进程树约束**，但它不隔离文件系统或网络；生产 CLI 仍因缺少经过验证的 OS 沙箱和网络出口控制而 fail-closed。2026-08-23 在本机完成了三次真实 DeepSeek 只读 smoke（`deepseek-v4-flash`）：第一次为较宽的项目检查，8 轮、12 次只读工具调用、148,994 tokens、约 4 分 28 秒；第二次严格限定为读取 README 前 30 行且不递归，2 轮、1 次 `fs.read`、13,636 tokens、约 12.2 秒；第三次再次限制为 README 前 10 行和一句话摘要，2 轮、1 次 `fs.read`、13,761 tokens、约 12.3 秒。任务范围不同，不能据此得出严格性能或成本结论；它们也不代表所有模型、任务或 live 工具已经验证。真实 OpenAI、真实 SSH 会话、浏览器外网导航、GUI、插件进程隔离和 OS 级沙箱仍明确标记为 `LIVE INTEGRATION NOT VERIFIED` 或 `BLOCKED`。
+当前版本的重点仍是**不设置 API key 也能运行的离线垂直链路**：Fake Provider、文件/Git 工具、审批与恢复、SQLite WAL/FTS5、Fake SSH、Fake Browser、Fake MCP/Plugin、只读子代理、流式事件和 replay 都可以用自动化测试验证。Windows 11 + Docker Desktop 现已具备经过主动探测的 Linux 容器执行边界：固定镜像摘要、`--network none`、只读根与宿主源码挂载、512 MiB 临时可写工作副本、隐藏状态/VCS/本机依赖目录、非 root、capabilities 全移除、no-new-privileges，以及 CPU/memory/PID/tmpfs 限额；宿主 Docker CLI 继续受 Job Object 进程树约束。当前切片可运行 Python/bash 验证和需要写缓存/构建产物的命令，但不能联网安装依赖，构建产物也不会自动回写宿主。真实 OpenAI、SSH、浏览器外网、GUI 和插件进程隔离仍未验证。
 
 ## 安装与首次启动
 
@@ -25,6 +25,8 @@ uv run astercode doctor --root .
 ```
 
 状态文件默认在项目内 `.astercode/`，不会自动读取仓库 `.env`、PowerShell profile、bash rc 或个人 SSH 目录。
+
+本机 process/shell 还要求 WSL2、Docker Desktop Linux engine 和已固定的 Python 镜像。`astercode doctor` 只有在镜像摘要、只读源码、临时副本写入不回传、隐藏状态目录和 `--network none` 主动探测全部通过后才显示 `sandbox/network enforcement = ENFORCED`；否则继续 fail-closed。
 
 ### 在任意 VS Code 项目中直接输入 `aster`
 
@@ -227,9 +229,9 @@ uv run astercode memory forget MEMORY_ID --root .
 
 ## 网络、SSH、浏览器与 GUI
 
-- 网络默认 `deny_by_default`；当前没有经过验证的 OS egress/allowlist 沙箱，因此外部网络工具 fail-closed。此前 `allow_unsandboxed` 审批可能在 `deny_by_default` 下越过未验证网络边界的问题已经修复：生产 CLI 不注入伪造的 verified boundary，process/shell 即使获批也不会在无沙箱、无网络强制策略时启动。自动化测试只能通过显式依赖注入 deterministic verified boundaries 来覆盖执行路径，该测试注入不是生产能力。
+- 网络默认 `deny_by_default`。本机 Docker process/shell 使用 `--network none` 并通过主动连接失败探测；它只证明这些容器没有网络，不是浏览器、SSH 或宿主进程的通用 egress allowlist。未通过 Docker attestation 时 process/shell 即使获批也不会启动。
 - P0 Git 查询使用固定 Git 可执行文件和干净环境，设置 `GIT_NO_LAZY_FETCH=1`，避免 partial/promisor clone 在 status/diff/log/show/branch 中隐式联网；仓库配置若请求 filter/diff/merge 外部驱动、hooks、fsmonitor、外部 attributes/excludes 文件或 include 会在启动 Git 前拒绝，diff/show 同时禁用 external diff/textconv。这不把 Git push 变成 P0；push 仍是 P3 且网络边界未验证时 blocked。
-- 当前 Windows 主机上的 AppContainer API 只是候选方案，尚未形成可验证 adapter；Windows Sandbox、Hyper-V、WSL、Docker/Podman 在本机不可用或当前非管理员账户无法启用。SSH、浏览器和其他真实网络能力因此继续保持 `BLOCKED`。
+- 当前 Windows 主机已验证 WSL2、Docker Desktop Linux engine、PowerShell 7 和固定 Python 镜像。AppContainer/Windows Sandbox/Hyper-V 仍不是已验证路径；SSH、浏览器和其他真实网络能力继续保持 `BLOCKED`。
 - `authorized_ssh_hosts = []` 时，运行时代码拒绝所有真实 SSH。现已实现默认关闭的系统 OpenSSH 命令通道：只有 `security.ssh.enabled=true`、非空精确 allowlist 和宿主注入的可信网络边界同时满足时才会装配；它固定使用系统绝对路径、`BatchMode`、专用 strict `known_hosts`、SSH agent/keychain，并禁用密码、配置文件、代理跳转、转发、X11 和连接复用。配置指纹必须由专用 `known_hosts` 中唯一的精确 host:port 公钥推导一致。真实上传、下载、远程 stat 和原子写回滚尚未实现，真实主机也未连接验证，因此 live SSH 继续 `BLOCKED`。审批动作仍绑定完整主机配置与 `known_hosts` SHA-256；远端停止无法确认时报告 `unknown`。
 - `BrowserTools` 现有可选的 Playwright + Microsoft Edge 只读后端，始终使用非持久化 context，不复用用户 profile，并关闭 JavaScript、下载、权限和 Service Worker。每个请求和重定向都做 allowlist、DNS 私网/metadata 复核，但这只是纵深防御，不是 OS egress sandbox。本机只验证了 `about:blank` 无网络启动；正常 CLI 默认 `engine="disabled"`，且没有宿主网络证明时 policy 和 executor 都拒绝外网导航。真实下载和表单提交仍关闭；Fake Browser 继续用于确定性测试。
 - 原生桌面 GUI 默认关闭，当前没有可用 live 适配器。
@@ -248,7 +250,7 @@ SQLite 使用 WAL 和显式 schema migrations，当前 schema v7；包含 sessio
 uv run astercode audit verify --root .
 ```
 
-当前工作区审计只是一个随运行增长的快照：本次核对为 `valid=true, entries=2707`（head `cf34941b...`）；历史 smoke 修复时的 `entries=2693` 是当时的记录数，不是永久基线。
+当前工作区审计只是一个随运行增长的快照：本次核对为 `valid=true, entries=2741`（head `a4436347...`）；历史 smoke 修复时的 `entries=2693` 是当时的记录数，不是永久基线。
 
 ## 测试与质量检查
 
@@ -266,16 +268,17 @@ uv pip check --python .venv\Scripts\python.exe
 uv run python scripts/live_chat_cycle_smoke.py --root C:\path\to\empty-test-workspace
 ```
 
-自动化测试不需要 API key、真实网络或 SSH；使用 deterministic Fake Provider、Fake SSH、Fake Browser、Fake MCP/Plugin、Fake 子代理、临时 Git 仓库和 replay fixture。上面的 live cycle 是例外，需要显式配置真实 Provider 和 key。Windows Job Object 已通过本机父子进程树终止、`process.stop` 和分配失败不执行目标代码测试；这只证明进程树约束，不证明文件/网络隔离。2026-08-23 的 DeepSeek 只读 smoke 以及受控的同会话文件创建/修改/删除 smoke 已通过，但不替代自动化测试，也没有证明成本、长任务、Shell、远程操作或其他 live 权限安全。Playwright + 本机 Edge 的 `about:blank` 离线 smoke 已通过，但外网导航未运行。Linux 实机 bash、PowerShell 7、真实 OpenAI、真实 SSH、浏览器网络、GUI、MCP/plugin live runner 和 OS 沙箱仍需独立验证。
+大多数自动化测试不需要 API key、真实网络或 SSH；使用 deterministic Fake Provider/adapter、临时 Git 仓库和 replay fixture。Docker live 测试使用固定摘要镜像，实际验证宿主源码只读、临时副本可写且不回传、生成目录排除、Python/compileall、隐藏 agent state、无网络、超时清理和 start/poll/stop。真实 DeepSeek session `session_d8d98eaef8fe4e6882bf4691bfac7894` 走通 Function Call → 精确审批 → 临时副本 `python -m compileall -q .` → 退出码 0；此前一次复制 `.venv` 的超时被标为 `unknown`，reconcile 确认无残留后才修复并新建 session 重试。该 smoke 不证明成本、远程操作或其他 live 权限安全。
 
-本轮最终全量回归结果为 `351 passed, 10 skipped`；另有历史本机 Edge 离线 smoke `1 passed, 5 deselected`。skip 仍代表缺少相应平台/权限或 live 条件，不应解释成已通过。
+本轮最终全量回归结果为 `373 passed, 10 skipped`；Docker 专项与现场用例为 `14 passed`。真实 DeepSeek 非 Git 工作区对话回归 session `session_c004966b009d4c479562b714e0d3c56a` 通过聊天及两轮创建、修改、删除：7 个用户回合、6 次精确审批、7 次工具调用、6 次实际副作用，最终测试文件不存在。针对模型使用空字符串表示工作区根路径的现场复测 session `session_0925077d608240018fdb47a936e29a8a` 也已完成，且空路径只对只读文件工具安全映射，删除等副作用工具仍拒绝。内联命令恢复 session `session_038b35bb629348e4aa6f9ce66d30063e` 证明 `python -c` 不执行，模型随后自动改用已审查文件，经精确审批进入 Docker filesystem/network sandbox 并输出 `5`。另有历史本机 Edge 离线 smoke `1 passed, 5 deselected`。skip 仍代表缺少相应平台/权限或 live 条件，不应解释成已通过。
 
 ## 常见问题
 
 - **没有 API key**：使用 `--fake` 或 `--replay`，这是受支持的离线模式。
 - **`provider-key UNSET`**：只影响真实模型调用，不影响离线测试。DeepSeek 使用 `DEEPSEEK_API_KEY`，OpenAI 使用 `OPENAI_API_KEY`，两者不会互相借用。
 - **DeepSeek 报 `[1m]` 无效**：去掉 Claude Code 专用后缀，使用 `deepseek-v4-flash` 或 `deepseek-v4-pro`。
-- **`no verified process sandbox` / `no verified process enforcement`**：预期的安全阻断；Job Object 不是文件/网络沙箱，审批也不能替代强制边界。不要为了绕过它关闭安全策略。
+- **`configured sandbox image is not present locally`**：先按配置下载精确镜像；标签会在启动前解析并复核不可变 RepoDigest。本机因 Docker Hub TLS 失败，使用 Google Artifact Registry 管理的 `mirror.gcr.io` 缓存并固定摘要。
+- **`no verified process sandbox` / `no verified process enforcement`**：Docker CLI、Linux engine、固定镜像或主动探测未通过；审批不能替代强制边界，不要关闭安全策略绕过。
 - **`SSH host is not explicitly allowlisted`**：默认 SSH 关闭；需要经过安全评审、known_hosts 和指纹配置，且 live transport 仍未验证。
 - **`approval binding mismatch`**：动作参数、路径、cwd、diff、主机或 nonce 发生变化，重新发起审批。
 - **`unknown`**：超时或取消后无法确认副作用；先用只读查询核对，不自动重试非幂等动作。

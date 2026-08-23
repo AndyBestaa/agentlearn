@@ -103,7 +103,11 @@ class _LiveToolProposal(StrictModel):
         )
     )
     cwd: str | None = Field(
-        description="Use null for the workspace root or an authorized absolute cwd."
+        description=(
+            "For every local tool use null to mean the host-authorized workspace root. "
+            "Do not guess /, /workspace, drive letters, or another host absolute path. "
+            "For ssh.* use null; the SSH adapter resolves its authorized remote context."
+        )
     )
     purpose: str
 

@@ -7,9 +7,9 @@
 | 里程碑 | 状态 | 已交付 | 仍缺 |
 | --- | --- | --- | --- |
 | M0 需求与安全基线 | completed | product spec、architecture、threat model、ADR、AGENTS、runtime prompt、配置模板 | 持续审查文档与实现的一致性 |
-| M1 CLI/Provider/状态机 | partial but runnable | Typer CLI、`aster` 无参持续对话入口、对话内精确审批、Pydantic 配置、LangGraph 状态机、Fake/replay、OpenAI Responses 与 DeepSeek Chat adapter；多轮 session 向模型渐进披露最近的用户/助手上下文但排除审批凭证；OpenAI/DeepSeek 固定官方 endpoint 且 HTTP `trust_env=false`；Provider 获得剩余时长/output cap、终态复核 usage，cost 不可跟踪时 fail-closed（input token 仅响应后核对）；三次 DeepSeek 只读 smoke；配置 `config_version=1` 迁移 | 真实 OpenAI smoke、更多 DeepSeek 账户/模型与故障回归 |
-| M2 本地工具 | partial but runnable | fs、受控 process/shell、Git、artifact、原子写、唯一进程句柄、有界双流 capture；process/shell 禁止绕过 Git/SSH/network/delete；Git P0 拒绝外部 filter/diff/hooks/fsmonitor/attrs 并设 `GIT_NO_LAZY_FETCH=1`；artifact 准确标记未保存后缀；Windows Job 约束已实测 | 文件/网络 OS 沙箱、CPU rate/磁盘容量硬限额、跨进程 Job handle 恢复、完整 Linux/PowerShell 7/Windows symlink 矩阵 |
-| M3 Policy/Approval | partial but enforceable | P0-P4 重判、审批 hash/nonce/TTL/单次消费/精确 session grant/撤销、dry-run、脱敏、kill switch、审计哈希链；SSH 审批绑定主机配置与 known_hosts SHA-256；`deny_by_default` 下 `allow_unsandboxed` 不能绕过未验证网络/沙箱边界；历史 smoke 暴露的 JSONL/SQLite 计数不一致已用审计镜像修复并回归（当时 `valid=true, entries=2693`；当前快照 `valid=true, entries=2707`） | 可验证 OS egress、完整文件系统 sandbox、管理员级不可篡改审计 |
+| M1 CLI/Provider/状态机 | partial but runnable | Typer CLI、`aster` 无参持续对话入口、对话内精确审批、Pydantic 配置、LangGraph 状态机、Fake/replay、OpenAI Responses 与 DeepSeek Chat adapter；多轮 session 向模型渐进披露最近的用户/助手上下文但排除审批凭证；非 Git 只读失败和执行前陈旧补丁拒绝可作为有界观察继续；OpenAI/DeepSeek 固定官方 endpoint 且 HTTP `trust_env=false`；Provider 获得剩余时长/output cap、终态复核 usage，cost 不可跟踪时 fail-closed（input token 仅响应后核对）；三次 DeepSeek 只读 smoke及非 Git 同会话双循环；配置 `config_version=1` 迁移 | 真实 OpenAI smoke、更多 DeepSeek 账户/模型与故障回归 |
+| M2 本地工具 | runnable Docker build slice | fs、Git、artifact、原子写、唯一进程句柄、有界 capture；Windows Job；Docker 固定摘要、只读宿主源码、512 MiB 临时可写副本、无网络、非 root、compileall 和清理已现场验证 | 产物受控导出、更多语言镜像、复制一致性、跨进程 container/Job 恢复、Linux 原生与完整 Ctrl-C/symlink 矩阵 |
+| M3 Policy/Approval | partial but enforceable | P0-P4、精确审批、脱敏、kill switch、哈希审计；Docker 只有主动 probe 通过才向 policy 提供 process/network attestation，配置/审批不能伪造 | 通用 allowlist egress、镜像签名/SBOM/扫描、管理员级不可篡改审计 |
 | M4 Memory/Recovery | partial but usable | SQLite WAL/FTS5、schema v7 migrations/backups、三层 memory、edit/conflict/supersedes、字段保留型 checkpoint compaction、跨进程审批恢复、process registry/read-only reconcile、stream/replay；所有写入前 schema preflight 拒绝 future/gap/伪造版本、缺表列和非 FTS5 | 任意外部副作用的自动回滚、远程 reconcile、跨平台旧 PID 回收的 live 证明 |
 | M5 SSH/SFTP | transport slice, live blocked | Fake SSH 全契约；默认关闭的系统 OpenSSH 命令通道；固定系统路径和结构化 argv；严格专用 known_hosts 与派生指纹一致性；agent/keychain-only；禁用密码、代理、转发、X11、复用；allowlist/网络证明双门槛；远端停止 unknown | 可信 SSH egress allowlist、首次指纹登记、真实主机、SFTP、远程 PID、备份/原子替换/回滚和现场验证 |
 | M6 Browser/MCP/Plugin/Subagent/GUI | offline complete, engine slice verified | Fake Browser/MCP/Plugin；可选 Playwright + Edge 非持久化只读 context；每请求 allowlist/DNS/重定向检查；`about:blank` 零页面网络 smoke；Draft 2020-12 严格 schema；只读子代理双开关、原子父子预算 reservation/usage 合并、跨重启全额保守恢复、grant/parent/all 定向取消 | 浏览器 OS egress、外网导航/下载/提交仍 blocked；子代理仍同进程且 live delegation blocked；真实 MCP/plugin 隔离、GUI、生产调度 |
@@ -49,7 +49,7 @@
 - 用量：148,994 tokens（输入与输出合计）；成本尚未从 DeepSeek 账单核对。
 - 耗时：约 4 分 28 秒。
 - 未覆盖：文件写入、Shell/Git 副作用、审批恢复、真实 SSH、浏览器、OpenAI Provider、长任务和错误重试。
-- 发现：流式事件分片过细导致审计写放大，重复上下文造成 Token 使用过高；运行后 `astercode audit verify` 曾报 JSONL/SQLite 少一条记录。随后已完成 delta batching、context compaction、`status=running` 生命周期同步和审计镜像修复；`uv run astercode audit repair --root . --confirm` 追加 1 条 `audit.mirror_repaired` 后，当时 `audit verify` 实测 `valid=true, entries=2693`。这些是已修复并回归的历史问题；当前工作区快照再次核对为 `valid=true, entries=2707`（head `cf34941b...`），记录数会随正常运行增长，smoke 仍不代表完整 live 或性能通过。
+- 发现：流式事件分片过细导致审计写放大，重复上下文造成 Token 使用过高；运行后 `astercode audit verify` 曾报 JSONL/SQLite 少一条记录。随后已完成 delta batching、context compaction、`status=running` 生命周期同步和审计镜像修复；`uv run astercode audit repair --root . --confirm` 追加 1 条 `audit.mirror_repaired` 后，当时 `audit verify` 实测 `valid=true, entries=2693`。这些是已修复并回归的历史问题；当前工作区快照再次核对为 `valid=true, entries=2741`（head `a4436347...`），记录数会随正常运行增长，smoke 仍不代表完整 live 或性能通过。
 
 修复后又在同一主机完成了第二次低预算、窄范围只读 smoke：
 
@@ -59,7 +59,9 @@
 - 实际：2 轮；12,601 输入、1,035 输出，共 13,636 tokens；约 12.2 秒；成本字段为 `null`。
 - 对比：第一次为 148,994 tokens、约 4 分 28 秒，第二次观测值明显更低；但第二次任务被严格收窄，因此这不是同负载 A/B 测试，不能单独归因于修复，也不能外推为 SLA 或完整 live 验收。
 
-同一主机还完成了 Windows Job Object 的本机验证：目标进程在 `CREATE_SUSPENDED` 状态先分配进 Job 再恢复，父子树在 Job close 与 `process.stop` 后退出，模拟 assignment 失败时目标 marker 不会创建。Job 配置包含 `KILL_ON_JOB_CLOSE`、树级 active-process/job-memory/累计 user-mode CPU-time limit，三类限额均有本机触发测试，但没有文件系统或网络隔离。AppContainer 目前只是候选方案；Windows Sandbox、Hyper-V、WSL、Docker/Podman 在当前非管理员环境中不可用或无法启用，因此生产 process/shell、SSH、Browser 和网络仍保持 `BLOCKED`。
+同一主机还完成了 Windows Job Object 验证。随后新增固定 RepoDigest 的 Docker 临时构建沙箱：主动 probe 与现场测试证明只读 root/宿主源码、隐藏状态/VCS/本机依赖、512 MiB 临时可写副本、`--network none`、非 root、cap-drop/no-new-privileges、Python 执行、compileall、超时清理和 start/poll/stop。构建写入不会回传宿主；SSH、Browser 和其他 live 网络不继承该证明。
+
+真实 DeepSeek 垂直 smoke `session_46f7633fc2fe4277937777c167fc4413` 验证了 `python --version`。临时构建第一次因复制 `.venv` 超时为 `unknown`，只读 reconcile 确认无残留；固定排除生成目录后，session `session_d8d98eaef8fe4e6882bf4691bfac7894` 在约 1.85 秒完成 `python -m compileall -q .`，退出码 0，证明 Function Call→精确审批→临时构建副本→结果证据链可用。
 
 ## 后续执行顺序
 
@@ -76,7 +78,7 @@
 
 - 真实 OpenAI：确认当前安装 SDK 类型定义和账户模型 ID，使用一次性低预算 smoke；key 只来自 `OPENAI_API_KEY` 环境变量/secret broker。
 - 真实 DeepSeek：已使用 `provider="deepseek"`、`DEEPSEEK_API_KEY`、`ASTERCODE_MODEL_ID=deepseek-v4-flash` 完成三次低风险只读 smoke，以及可复现的同会话受控写入 smoke。最终提交 `904cc6e` 上的 session `session_49c2fb8db498411880b8680b38bb89da` 包含聊天和两轮 `create → modify → delete`，实际为 7 个用户 turn、6 次单次精确审批、6 次副作用工具调用（4 次 `fs.apply_patch`、2 次 `fs.delete`）；宿主逐步按字节核对内容，最终测试文件不存在，审计链有效。该现场测试促成了非 SSH host 权威派生、Provider 结构错误有界重试、重复副作用抑制和可复现 live harness；仍需核对账单并覆盖 Shell、长任务及更多故障恢复路径。不要复用 Claude Code 的 `ANTHROPIC_*` 或 `[1m]` 模型别名。实现与官方[首次调用](https://api-docs.deepseek.com/zh-cn/)和[Chat API](https://api-docs.deepseek.com/api/create-chat-completion)对齐。
-- OS sandbox/egress：Windows Job Object 只解决当前运行时的进程树与部分资源约束；下一步评估并实现可验证的文件系统与网络隔离。AppContainer 仅作为候选，未通过 adapter/egress 实测前不能启用；当前主机又没有可用的 Windows Sandbox、Hyper-V、WSL、Docker/Podman 路径。完成 Windows/Linux 隔离、CPU rate/磁盘容量与 Linux cgroup 等资源配额、DNS/IP/redirect 检查后，才能开放生产 process/network。
+- OS sandbox/egress：Docker 临时可写副本切片已完成；下一步实现产物白名单导出、复制前后源码一致性核对、镜像签名/SBOM/扫描、跨进程容器恢复和 CLI Ctrl-C E2E。SSH/Browser 仍需各自独立 egress allowlist。
 - SSH：加入真实 transport 依赖、known_hosts/指纹人工确认和精确 P3 审批；先只读 test，再做远程写流程。
 - Browser：Playwright + Edge 非持久化 context 与离线 `about:blank` 已验证；下一步必须先实现独立 OS egress allowlist，再进行人工外网 allowlist 验证。真实下载、提交和登录态仍关闭。
 - MCP/Plugin：固定来源/版本/hash，独立隔离进程和网络策略，不能把 manifest 的 read-only 声明当授权。
@@ -84,7 +86,7 @@
 
 ## 每次阶段验收命令
 
-本轮最终全量回归为 `351 passed, 10 skipped`；另有历史本机 Edge 离线 smoke `1 passed, 5 deselected`。10 个 skip 保持为未满足的平台/权限或 live 条件，不计入已完成能力。
+本轮最终全量回归为 `373 passed, 10 skipped`；Docker 专项/现场为 `14 passed`。最新真实 DeepSeek 非 Git 对话回归 session `session_c004966b009d4c479562b714e0d3c56a` 完成 7 个用户回合、6 次 consumed 单次审批、7 次工具调用和 6 次实际副作用，最终文件不存在；空 path 只读现场复测 session `session_0925077d608240018fdb47a936e29a8a` 也为 completed；内联代码恢复 session `session_038b35bb629348e4aa6f9ce66d30063e` 验证拒绝 `python -c` 后自动改用工作区文件并在 Docker sandbox 输出 `5`。另有历史本机 Edge 离线 smoke `1 passed, 5 deselected`。10 个 skip 保持为未满足的平台/权限或 live 条件，不计入已完成能力。
 
 ```powershell
 uv run astercode doctor --root .

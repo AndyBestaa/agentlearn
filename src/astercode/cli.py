@@ -21,6 +21,7 @@ from rich.table import Table
 from .config import (
     AppConfig,
     ConfigError,
+    SandboxBackend,
     load_config,
     validate_strict_project_file,
     validate_strict_workspace_root,
@@ -353,8 +354,48 @@ def doctor(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False)) -> 
         checks.append(("model-id", "SET" if cfg.model.model_id else "UNSET", cfg.model.model_id or "not configured"))
         if cfg.model.base_url is not None:
             checks.append(("model-base-url", "PINNED", cfg.model.base_url))
-        checks.append(("network enforcement", "BLOCKED", "no runtime-attested OS egress sandbox/allowlist adapter"))
-        checks.append(("sandbox", "BLOCKED", "no runtime-attested filesystem/process sandbox; launch tools fail closed even after approval"))
+        process = cfg.security.process
+        if process.sandbox_backend is SandboxBackend.CONTAINER:
+            from .tools.docker_process import (
+                DockerSandboxUnavailable,
+                attest_docker_sandbox,
+                discover_trusted_docker,
+            )
+
+            docker_cli = discover_trusted_docker()
+            checks.append(
+                (
+                    "docker-cli",
+                    "OK" if docker_cli is not None else "BLOCKED",
+                    str(docker_cli) if docker_cli is not None else "trusted Docker CLI not found",
+                )
+            )
+            try:
+                attestation = attest_docker_sandbox(
+                    configured_image=process.container_image,
+                    user=process.container_user,
+                    max_processes=process.max_processes,
+                    max_memory_bytes=process.max_memory_bytes,
+                    cpus=process.container_cpus,
+                    tmpfs_bytes=process.container_tmpfs_bytes,
+                    workspace_bytes=process.container_workspace_bytes,
+                )
+            except DockerSandboxUnavailable as exc:
+                detail = str(exc)
+                checks.append(("network enforcement", "BLOCKED", detail))
+                checks.append(("sandbox", "BLOCKED", detail))
+            else:
+                digest_suffix = attestation.image_digest.rsplit("@", 1)[-1]
+                detail = (
+                    "Docker probe passed: network=none, read-only source, "
+                    "ephemeral writable workspace, hidden agent state, "
+                    f"image={digest_suffix}"
+                )
+                checks.append(("network enforcement", "ENFORCED", "Docker --network none probe passed"))
+                checks.append(("sandbox", "ENFORCED", detail))
+        else:
+            checks.append(("network enforcement", "BLOCKED", "no runtime-attested OS egress sandbox/allowlist adapter"))
+            checks.append(("sandbox", "BLOCKED", "sandbox_backend is not an attested container adapter"))
         if not cfg.security.authorized_ssh_hosts:
             ssh_detail = "allowlist is empty; the system OpenSSH transport cannot be assembled"
         elif not cfg.security.ssh.enabled:

@@ -38,8 +38,9 @@ AsterCode 要保护：
 | 预算超调或未知费用 | Provider/tool 超过剩余时间/输出，或费用不可得 | 下传剩余时长和输出 cap、终态 usage 复核、tool timeout 取最小值；cost 不可跟踪时 fail-closed | 输入 token 只能响应后核对，无法请求前硬限 |
 | 大输出证据被误报完整 | capture 已丢弃后缀但 artifact 看似完整 | `source_complete`/`disk_complete`、丢弃量和 marker 分开记录；未保留后缀不落盘 | 有界留存意味着超限内容本身不可恢复 |
 | 子代理预算/取消泄漏 | 并发 overbook、重启后重复预算、取消错误 child | 双开关、原子 reservation、父子 usage 合并、重启全额保守扣减、grant/parent/all 定向取消 | offline runner 仍同进程；live delegation blocked |
-| 进程逃逸 | 子进程留存、Ctrl-C 只杀父进程 | Windows `CREATE_SUSPENDED`→Job assignment→resume、`KILL_ON_JOB_CLOSE`、树级 active-process/可选 memory limit、runtime_processes identity token/argv hash、kill switch；POSIX process group | Windows 父子树 Job close/stop 和分配失败不执行目标代码已实机测试；跨进程 Job handle 恢复、远程 kill、POSIX/所有平台完整 Ctrl-C 矩阵仍未验证 |
-| 网络 SSRF/外传 | redirect 到 127.0.0.1、私网、169.254.169.254 | 默认 deny；process/shell 要求运行时证明网络策略已强制执行；Fake Browser 检查 allowlist、redirect、解析地址和 metadata | 没有经验证的 OS egress adapter，`allow_unsandboxed` 审批不能放行，live 网络工具保持 blocked |
+| 进程逃逸 | 子进程留存、Ctrl-C 只杀父进程 | Windows Job Object 约束宿主 Docker CLI；容器 `--init`、唯一 name、force remove、PID limit；runtime identity/kill switch | exec timeout 与 start/poll/stop 已现场确认无残留；跨进程 Job/container 恢复和完整 CLI Ctrl-C 矩阵仍未验证 |
+| 网络 SSRF/外传 | redirect 到私网、metadata 或公网 | Docker process/shell 使用 `--network none` 且主动连接失败 probe；其他网络默认 deny；Browser 另做 allowlist/DNS 检查 | Docker 证明不覆盖 SSH/Browser/宿主；没有通用 allowlist egress adapter，live 网络工具保持 blocked |
+| 容器供应链/daemon | 标签漂移、恶意镜像、Docker socket/远程 daemon | 固定 RepoDigest、受信 CLI 路径、不继承 DOCKER_HOST/context/config/proxy、不挂载 socket、cap-drop/no-new-privileges | mirror cache 不扫描或修复漏洞；daemon、管理员、镜像签名/SBOM/扫描超出当前证明 |
 | SSH 劫持 | host key 变化、agent forwarding | 空 allowlist 直接拒绝；known_hosts 和指纹必须匹配；Fake backend 测试硬停止 | 真实 transport/host key 现场未验证 |
 | 恶意项目配置或状态 | 扩大根目录、诱导 live Provider/SSH、伪造 checkpoint 路径/预算、状态文件链接到外部 | 公共 CLI 严格绑定启动目录并重建安全配置；live Provider 只接受用户环境；reconcile 重验路径；恢复预算只可收窄；固定状态与配置拒绝 link/junction/hardlink | 内容文件 hardlink、mount/bind-mount 与跨进程 TOCTOU 仍需 OS sandbox；不要从不可信归档复制 `.astercode` |
 | 浏览器登录态泄露 | 复用用户主 profile、任意下载 | Playwright 使用非持久化 context，不接受用户 profile；JS、下载、权限和 Service Worker 关闭；Fake 使用内存 fixture | 只验证无网络 `about:blank`，登录、下载、提交和 GUI 仍关闭 |
@@ -63,11 +64,11 @@ AsterCode 要保护：
 
 ## 离线安全回归范围
 
-当前 fake/replay 测试覆盖：路径逃逸、恶意 argv、秘密 redaction、审批 hash/过期/单次使用、SSH 主机配置与 known_hosts hash 绑定、host key 变化、远程超时、`ssh.start` 未完成语义、`stop_all`/`close` unknown、Browser 私网/metadata/DNS rebinding、Draft 2020-12 扩展 schema/远程引用拒绝/递归参数风险重判、memory 冲突/投毒 advisory-only、process registry/kill switch、审计验证和 SQLite 并发。系统 OpenSSH 回归还覆盖固定 argv/干净环境、专用 known_hosts 派生指纹、默认关闭、空 allowlist 和网络证明双门槛；Playwright 回归覆盖非持久化 context、每请求 route guard 和默认无 egress 拒绝。配置迁移还覆盖预览、精确备份、原子写、并发冲突、future 版本和环境变量不持久化；数据库覆盖 future/gap/伪造版本、关键表列缺失和非 FTS5 preflight。Windows 实机还覆盖 Job Object 父子树 close/stop、树级 active-process/job-memory/累计 CPU-time 限额、assignment 失败时目标 marker 不出现、重复句柄、并发预算和有界双流 capture；另有回归保证 Provider 路线固定、Git P0 无外部驱动/lazy fetch、通用 process/shell 不绕过专用工具、父子预算/取消和不完整 artifact 标记。本轮全量为 `351 passed, 10 skipped`；历史本机 Edge 离线 smoke 另以显式开关通过，skip 不算能力通过。
+当前 fake/replay 回归继续覆盖路径、审批、SSH、Browser、extension、memory、process registry、审计、SQLite、Provider、Git 和子代理边界。Docker 回归覆盖固定 run 参数、镜像摘要、恶意单一 argv、remote-daemon/proxy 环境清除、不可隐藏 `.git` 拒绝和 fail-closed 装配；Windows live 用例覆盖只读宿主源码、临时写入不回传、生成目录排除、`--network none`、compileall、超时清理和 start/poll/stop。本轮全量为 `365 passed, 10 skipped`，Docker 专项/现场为 `14 passed`；skip 不算能力通过。
 
-审计链当前工作区快照（2026-08-23）为 `valid=true, entries=2707`；这只是会随正常运行增长的验证结果，不代表管理员级不可篡改或固定容量。
+审计链当前工作区快照（2026-08-23）为 `valid=true, entries=2741`；这只是会随正常运行增长的验证结果，不代表管理员级不可篡改或固定容量。
 
-仍需补齐或现场验证：Windows junction/reparse 权限矩阵、CLI Ctrl-C 完整 E2E、跨进程 Job handle 恢复、Linux bash、PowerShell 7、真实网络重定向、文件系统 sandbox/OS egress、真实 SSH 会话与 SFTP、浏览器外网/下载/提交、MCP/plugin 隔离 runner、GUI 和更多真实 Provider。Playwright + Edge 只验证了无网络引擎启动，不等于浏览器网络集成通过。当前主机的 AppContainer 仅是候选且未验证；Windows Sandbox、Hyper-V、WSL、Docker/Podman 不可用或无法由非管理员账户启用。
+仍需补齐或现场验证：Windows junction/reparse 权限矩阵、CLI Ctrl-C 完整 E2E、跨进程 Job/container 恢复、Linux 原生 Docker/bash、可写临时构建副本、镜像签名/SBOM/漏洞扫描、真实 SSH/SFTP、浏览器外网/下载/提交、MCP/plugin 隔离 runner、GUI 和更多真实 Provider。Playwright + Edge 只验证无网络引擎启动；Docker process 的 `--network none` 不能外推到浏览器或 SSH。
 
 ## 残余风险与停止条件
 

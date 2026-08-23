@@ -47,6 +47,29 @@ from .tools.filesystem import parse_patch
 
 _TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
+_RECOVERABLE_PREEXECUTION_POLICY_REASONS = frozenset(
+    {
+        "policy validation failed (ValueError)",
+        "inline interpreter code must use a separately reviewed constrained workflow",
+    }
+)
+
+
+def _tool_error_message(result: ToolResult) -> str:
+    return (
+        result.error.message
+        if isinstance(result.error, ToolError)
+        else str(result.error or "")
+    )
+
+
+def _is_recoverable_preexecution_rejection(result: ToolResult) -> bool:
+    return bool(
+        result.status is ToolStatus.CANCELLED
+        and not result.side_effects
+        and _tool_error_message(result) in _RECOVERABLE_PREEXECUTION_POLICY_REASONS
+    )
+
 
 TERMINAL_STATUSES = {
     SessionStatus.COMPLETED.value,
@@ -985,6 +1008,16 @@ class AsterCodeOrchestrator:
             # a model-controlled parameter. Remote work must use ssh.* and its
             # separately allowlisted host_id.
             host = "local"
+        proposal_cwd = proposal.cwd
+        if host == "local" and proposal_cwd is not None:
+            # Live models sometimes use a container-style virtual workspace
+            # marker even though they never see or control the host path. Map
+            # only these exact conventional markers to the configured
+            # workspace (represented by ``None``). Every other path still
+            # reaches the gateway's canonical authorization check.
+            normalized_marker = proposal_cwd.strip().replace("\\", "/").rstrip("/")
+            if normalized_marker in {"", "/", "/workspace", "workspace"}:
+                proposal_cwd = None
         canonical = json.dumps(
             {
                 "session_id": state["session_id"],
@@ -994,7 +1027,7 @@ class AsterCodeOrchestrator:
                 "tool": proposal.tool,
                 "arguments": arguments,
                 "host": host,
-                "cwd": proposal.cwd,
+                "cwd": proposal_cwd,
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -1007,7 +1040,7 @@ class AsterCodeOrchestrator:
             tool=proposal.tool,
             arguments=arguments,
             host=host,
-            cwd=proposal.cwd,
+            cwd=proposal_cwd,
             idempotency_key=digest,
         )
 
@@ -1442,7 +1475,25 @@ class AsterCodeOrchestrator:
         blockers = list(state.get("blockers", []))
         status = state.get("status", SessionStatus.RUNNING.value)
         prior_work = bool(state.get("completed") or state.get("tool_results"))
-        if contains_prompt_injection({"stdout": result.stdout, "stderr": result.stderr}):
+        prompt_injection_detected = contains_prompt_injection(
+            {"stdout": result.stdout, "stderr": result.stderr}
+        )
+        spec = self._tool_specs.get(result.tool)
+        recoverable_read_observation = bool(
+            spec is not None
+            and spec.idempotent
+            and not spec.side_effects
+            and result.status in {ToolStatus.FAILED, ToolStatus.TIMEOUT}
+            and not prompt_injection_detected
+        )
+        recoverable_invalid_proposal = bool(
+            _is_recoverable_preexecution_rejection(result)
+            and not prompt_injection_detected
+        )
+        recoverable_observation = (
+            recoverable_read_observation or recoverable_invalid_proposal
+        )
+        if prompt_injection_detected:
             blockers.append(f"possible prompt injection in untrusted output from {result.tool}")
             status = SessionStatus.BLOCKED.value
         if result.status is ToolStatus.COMPLETED:
@@ -1451,11 +1502,26 @@ class AsterCodeOrchestrator:
             blockers.append(f"unknown side-effect state for {result.action_id}")
             status = SessionStatus.BLOCKED.value
         elif result.status in {ToolStatus.FAILED, ToolStatus.TIMEOUT}:
-            blockers.append(f"tool {result.tool} did not complete ({result.status.value})")
-            status = SessionStatus.PARTIAL.value if prior_work else SessionStatus.FAILED.value
+            if recoverable_observation:
+                # A failed P0/idempotent read is still useful evidence.  Give
+                # the model one more bounded decision round so it can adapt
+                # (for example, skip Git in a non-repository workspace).
+                # The failed result is not completion evidence and budgets
+                # still cap repeated proposals.
+                status = SessionStatus.RUNNING.value
+            else:
+                blockers.append(f"tool {result.tool} did not complete ({result.status.value})")
+                status = SessionStatus.PARTIAL.value if prior_work else SessionStatus.FAILED.value
         elif result.status is ToolStatus.CANCELLED and not self._is_cancelled(state):
-            blockers.append(state.get("policy_reason") or "tool call cancelled")
-            status = SessionStatus.BLOCKED.value
+            if recoverable_invalid_proposal:
+                # Policy rejected malformed/stale arguments or an unsafe
+                # execution form before the executor ran, so no side effect
+                # occurred. Return that fact to the model as a bounded
+                # observation so it can choose a registered safe alternative.
+                status = SessionStatus.RUNNING.value
+            else:
+                blockers.append(state.get("policy_reason") or "tool call cancelled")
+                status = SessionStatus.BLOCKED.value
         update.update(
             tool_results=results,
             usage=usage.model_dump(mode="json"),
@@ -1470,7 +1536,11 @@ class AsterCodeOrchestrator:
             raw_tool_result=None,
             action_executed=False,
             action_attempts=0,
-            next_action="verify captured result",
+            next_action=(
+                "adapt to recoverable pre-execution tool failure"
+                if recoverable_observation
+                else "verify captured result"
+            ),
         )
         return update
 
@@ -1481,15 +1551,28 @@ class AsterCodeOrchestrator:
         checks = state.get("test_status", [])
         if not results or not checks:
             return False
-        latest = ToolResult.model_validate(results[-1])
-        latest_check = checks[-1]
-        if latest_check.get("call_id") != latest.call_id:
-            return False
-        if latest.status is not ToolStatus.COMPLETED or not bool(latest_check.get("verified")):
-            return False
-        if latest.tool == "process.start" and latest_check.get("running"):
-            return False
-        return True
+        checks_by_call = {
+            str(check.get("call_id")): check
+            for check in checks
+            if check.get("call_id") is not None
+        }
+        for raw in reversed(results):
+            result = ToolResult.model_validate(raw)
+            check = checks_by_call.get(result.call_id)
+            if check is None:
+                return False
+            if result.status is ToolStatus.COMPLETED:
+                if not bool(check.get("verified")):
+                    return False
+                if result.tool == "process.start" and check.get("running"):
+                    return False
+                return True
+            safely_rejected_before_execution = (
+                _is_recoverable_preexecution_rejection(result)
+            )
+            if not safely_rejected_before_execution:
+                return False
+        return False
 
     async def _verify(self, state: AgentState) -> dict[str, Any]:
         update = self._phase_update(state, "VERIFY")

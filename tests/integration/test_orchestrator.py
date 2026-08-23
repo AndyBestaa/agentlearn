@@ -656,6 +656,121 @@ async def test_unverified_side_effect_is_not_marked_complete_for_deduplication(
 
 
 @pytest.mark.asyncio
+async def test_inline_interpreter_denial_adapts_to_reviewed_workspace_file(
+    tmp_path: Path,
+) -> None:
+    class AdaptiveProcessGateway:
+        def __init__(self) -> None:
+            self.executed_argv: list[list[str]] = []
+
+        async def authorize(self, call, context, decision=None):
+            argv = list(call.arguments.get("argv", []))
+            if "-c" in argv:
+                return GatewayAuthorization(
+                    outcome="deny",
+                    risk=RiskLevel.P4,
+                    reason=(
+                        "inline interpreter code must use a separately reviewed "
+                        "constrained workflow"
+                    ),
+                )
+            return GatewayAuthorization(
+                outcome="allow",
+                risk=RiskLevel.P2,
+                reason="reviewed workspace file test",
+            )
+
+        async def execute(self, call, context):
+            argv = [str(item) for item in call.arguments["argv"]]
+            self.executed_argv.append(argv)
+            now = utc_now()
+            return ToolResult(
+                call_id=call.call_id,
+                action_id=call.action_id,
+                tool=call.tool,
+                cwd=call.cwd,
+                started_at=now,
+                ended_at=now,
+                status=ToolStatus.COMPLETED,
+                stdout="5\n",
+                side_effects=["process_start"],
+            )
+
+        async def verify(self, result, context):
+            return {"verified": result.status is ToolStatus.COMPLETED}
+
+    provider = DeterministicFakeProvider(
+        [
+            {
+                "plan": ["verify"],
+                "message": "Trying an inline verification.",
+                "tool_calls": [
+                    {
+                        "tool": "process.exec",
+                        "arguments": {
+                            "argv": ["python", "-c", "from add import add"],
+                            "cwd": str(tmp_path),
+                            "timeout": 30,
+                        },
+                        "host": "local",
+                        "cwd": str(tmp_path),
+                        "purpose": "verify addition",
+                    }
+                ],
+                "outcome": "continue",
+            },
+            {
+                "plan": ["verify safely"],
+                "message": "The inline form was rejected; running the reviewed file.",
+                "tool_calls": [
+                    {
+                        "tool": "process.exec",
+                        "arguments": {
+                            "argv": ["python", "add.py"],
+                            "cwd": str(tmp_path),
+                            "timeout": 30,
+                        },
+                        "host": "local",
+                        "cwd": str(tmp_path),
+                        "purpose": "run the reviewed workspace file",
+                    }
+                ],
+                "outcome": "continue",
+            },
+            {
+                "plan": [],
+                "message": "The reviewed file ran successfully.",
+                "tool_calls": [],
+                "outcome": "completed",
+            },
+        ]
+    )
+    gateway = AdaptiveProcessGateway()
+    core = AsterCodeOrchestrator(
+        provider,
+        gateway,
+        tools=[
+            ToolSpec(
+                name="process.exec",
+                capability="process.exec",
+                side_effects=["process_start"],
+                risk=RiskLevel.P2,
+            )
+        ],
+    )
+
+    result = await core.run("verify add.py without unsafe inline code")
+
+    assert result["status"] == "completed"
+    assert [item["status"] for item in result["tool_results"]] == [
+        "cancelled",
+        "completed",
+    ]
+    assert gateway.executed_argv == [["python", "add.py"]]
+    assert result["blockers"] == []
+
+
+@pytest.mark.asyncio
 async def test_retry_is_limited_to_idempotent_retryable_calls(tmp_path: Path) -> None:
     class FlakyGateway:
         def __init__(self) -> None:

@@ -78,9 +78,9 @@ OpenAI client 固定 `https://api.openai.com/v1`，DeepSeek client 固定 `https
 - 浏览器 OS egress 防 SSRF、真实外网导航、下载、提交和登录态工作流；Playwright + Edge 目前只完成无网络引擎 smoke。
 - 原生桌面 GUI（默认关闭）。
 - MCP/plugin 的真实隔离子进程、来源下载和网络策略。
-- Windows/Linux 文件系统沙箱、CPU rate/磁盘容量限制、Linux namespace/cgroup 和 egress 防火墙。Windows Job Object 已提供树级 active-process、job-memory 与累计 user-mode CPU-time limit，但不是完整 OS 沙箱。
-- AppContainer 当前只是未验证候选；本机没有可用的 Windows Sandbox、Hyper-V、WSL 或 Docker/Podman 路径，且当前账户非管理员，因此不能据此启用生产执行。
-- Linux bash、PowerShell 7 和 Windows junction/reparse point 的完整实机矩阵。
+- Docker 临时构建沙箱已完成 Windows 11 + Docker Desktop 现场切片：固定 RepoDigest、只读 root/宿主源码、隐藏状态/VCS/本机依赖、512 MiB 可写 tmpfs 副本、`--network none`、非 root、capabilities 全移除、no-new-privileges、PID/memory/CPU/tmpfs 限额，并由主动 probe attestation。固定复制器使用 Python `copytree` 与 `os.execvp`，模型 argv 不进入 shell；构建产物随容器删除。
+- AppContainer、Windows Sandbox/Hyper-V、产物受控导出、复制期间并发修改检测、镜像签名/SBOM/扫描和跨进程容器恢复仍未验证。
+- Linux 原生 Docker/bash、Windows junction/reparse point 和完整 Ctrl-C 实机矩阵。
 
 这些能力没有 verified adapter 时必须保持 `blocked` 或 `LIVE INTEGRATION NOT VERIFIED`，不能仅靠 prompt 放行。
 
@@ -96,7 +96,7 @@ OpenAI client 固定 `https://api.openai.com/v1`，DeepSeek client 固定 `https
 | P3 | 远程写、push、部署、sudo、外部提交 | 即时逐项审批 |
 | P4 | 递归删除、强推、生产/IAM/磁盘动作 | 默认 deny |
 
-通用 `process.exec`/`process.start`/`shell.exec` 不是逃生舱：策略检查程序名、解释器内联代码、wrapper 和 shell 文本，尝试绕过专用 Git、SSH、network/external-service、delete 或机器控制工具的动作直接按 P4 拒绝。即便是其他 process/shell 动作，也仍需运行时证明文件/进程沙箱和网络策略，审批不能替代这些边界。
+通用 `process.exec`/`process.start`/`shell.exec` 不是逃生舱：策略检查程序名、解释器内联代码、wrapper 和 shell 文本，尝试绕过专用 Git、SSH、network/external-service、delete 或机器控制工具的动作直接按 P4 拒绝。当前 Docker adapter 只有在实际 probe 通过后才为 process policy 提供 sandbox/network attestation；配置字段和审批本身都不能提供证明。
 
 审批持久化 `approval_id`、`action_id`、规范化动作 hash、cwd、真实路径、diff hash、主机指纹、过期时间和一次性 nonce。对于 SSH，动作 hash 的 `ssh_target` 还包含配置中的 hostname、port、user、配置指纹、known_hosts 规范化真实路径和当前文件 SHA-256；主机配置或信任文件任一变化都会使旧审批失效。消费、拒绝、撤销和跨进程恢复均校验绑定值。参数、路径、主机或 diff 变化会让旧审批失效。会话级授权只允许 P1/P2，并继续精确绑定同一 session 与动作 hash；P3/P4 不可获得会话级授权。
 
@@ -112,7 +112,7 @@ OpenAI client 固定 `https://api.openai.com/v1`，DeepSeek client 固定 `https
 6. process identity token 和 argv hash。
 7. `approval_grants`，用于与 session、动作哈希和到期时间精确绑定的窄范围授权。
 
-升级有事务性备份；数据库和 JSONL audit 都保存哈希链。每次 `Storage.initialize()` 在任何写连接、迁移锁或 DDL 之前先以只读连接做 schema preflight，并在锁内再次复核。future schema、非连续/gap migration history、伪造版本记录、关键表或列缺失，或 `memory_fts` 不是 FTS5 虚表时，初始化会 fail-closed 且不改变数据库。`astercode audit verify` 只读验证链和 SQLite 一致性，不宣称能防止拥有数据库文件权限的外部管理员篡改。2026-08-23 的 DeepSeek smoke 结束后曾发现 JSONL/SQLite 少一条记录；随后执行 `uv run astercode audit repair --root . --confirm` 追加 1 条 `audit.mirror_repaired`，当时实测 `audit verify` 返回 `valid=true, entries=2693`。当前工作区快照再次核对为 `valid=true, entries=2707`（head `cf34941b...`）；记录数会随正常运行增长，不是固定基线。该历史一致性缺陷已修复并回归，但这不改变管理员级审计防篡改和 OS 边界仍未验证的结论。
+升级有事务性备份；数据库和 JSONL audit 都保存哈希链。每次 `Storage.initialize()` 在任何写连接、迁移锁或 DDL 之前先以只读连接做 schema preflight，并在锁内再次复核。future schema、非连续/gap migration history、伪造版本记录、关键表或列缺失，或 `memory_fts` 不是 FTS5 虚表时，初始化会 fail-closed 且不改变数据库。`astercode audit verify` 只读验证链和 SQLite 一致性，不宣称能防止拥有数据库文件权限的外部管理员篡改。2026-08-23 的 DeepSeek smoke 结束后曾发现 JSONL/SQLite 少一条记录；随后执行 `uv run astercode audit repair --root . --confirm` 追加 1 条 `audit.mirror_repaired`，当时实测 `audit verify` 返回 `valid=true, entries=2693`。当前工作区快照再次核对为 `valid=true, entries=2741`（head `a4436347...`）；记录数会随正常运行增长，不是固定基线。该历史一致性缺陷已修复并回归，但这不改变管理员级审计防篡改和其他外部边界仍未验证的结论。
 
 记忆分三层：
 

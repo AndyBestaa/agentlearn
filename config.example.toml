@@ -64,17 +64,20 @@ backend = "openssh"
 connect_timeout_seconds = 15
 
 [security.process]
-# 当前版本没有经过验证的文件系统/网络 OS 沙箱；none 会让生产 CLI
-# 的 process/shell 默认 fail-closed。allow_unsandboxed_process 是旧配置兼容字段；
-# 它不参与当前放行判断，也不能替代 verified sandbox 或 network enforcement。
-sandbox_backend = "none"
+# container 只有在受信 Docker CLI、本地镜像不可变摘要和主动隔离探测
+# 全部通过后才会装配；缺少任一条件时 process/shell 继续 fail-closed。
+sandbox_backend = "container"
 allow_unsandboxed_process = false
 clean_path = []
+container_image = "mirror.gcr.io/library/python@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a"
+container_cpus = 1.0
+container_tmpfs_bytes = 67108864
+container_workspace_bytes = 536870912
+container_user = "65534:65534"
 max_output_bytes = 1048576
 default_timeout_seconds = 120
 max_timeout_seconds = 3600
-# Windows 会把这些值应用于 Job Object 的树级 active-process、job-memory
-# 和累计 user-mode CPU-time limit；Job Object 只约束进程树/资源，不隔离文件或网络。
+# Docker 使用 PID/memory 限制；Windows 还会用 Job Object 约束宿主 Docker CLI 树。
 max_processes = 32
 max_memory_bytes = 2147483648
 max_cpu_time_seconds = 600

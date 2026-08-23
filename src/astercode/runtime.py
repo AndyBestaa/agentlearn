@@ -7,7 +7,7 @@ import inspect
 import math
 from typing import Any, Callable, Literal, Mapping, cast
 
-from .config import AppConfig
+from .config import AppConfig, SandboxBackend
 from .extensions import ExtensionKind, ExtensionRegistry, MCPTools, PluginTools
 from .gateway import LocalToolGateway
 from .models import RiskLevel, SessionStatus, ToolSpec
@@ -35,6 +35,12 @@ from .subagents import (
 )
 from .tools.browser import BrowserBackend, BrowserTools
 from .tools.desktop import NativeDesktopTools
+from .tools.docker_process import (
+    DockerProcessTools,
+    DockerSandboxAttestation,
+    DockerSandboxUnavailable,
+    attest_docker_sandbox,
+)
 from .tools.filesystem import FilesystemTools
 from .tools.git import GitTools
 from .tools.openssh import OpenSSHBackend
@@ -89,6 +95,7 @@ def build_registry(
     verified_ssh_network_policy: bool = False,
     verified_browser_network_policy: bool = False,
     browser_backend: BrowserBackend | None = None,
+    docker_attestation: DockerSandboxAttestation | None = None,
 ) -> ToolRegistry:
     """Build host tools from configuration plus runtime-attested boundaries.
 
@@ -101,18 +108,66 @@ def build_registry(
     registry = ToolRegistry()
     registry.register_provider(FilesystemTools(config.security.authorized_roots))
     registry.register_provider(GitTools(config.security.authorized_roots))
-    registry.register_provider(ProcessTools(
-        config.security.authorized_roots,
-        network_mode=config.security.network_mode.value,
-        max_output=config.security.process.max_output_bytes,
-        clean_path=config.security.process.clean_path,
-        sandbox_enforced=verified_process_sandbox,
-        network_policy_enforced=verified_process_network_policy,
-        max_processes=config.security.process.max_processes,
-        max_memory_bytes=config.security.process.max_memory_bytes,
-        max_cpu_time_seconds=config.security.process.max_cpu_time_seconds,
-        max_timeout=config.security.process.max_timeout_seconds,
-    ))
+    process = config.security.process
+    process_tools: ProcessTools
+    if (
+        process.sandbox_backend is SandboxBackend.CONTAINER
+        and not (verified_process_sandbox or verified_process_network_policy)
+    ):
+        try:
+            attestation = docker_attestation or attest_docker_sandbox(
+                configured_image=process.container_image,
+                user=process.container_user,
+                max_processes=process.max_processes,
+                max_memory_bytes=process.max_memory_bytes,
+                cpus=process.container_cpus,
+                tmpfs_bytes=process.container_tmpfs_bytes,
+                workspace_bytes=process.container_workspace_bytes,
+            )
+        except DockerSandboxUnavailable:
+            # Configuration intent never widens authority.  Keep the existing
+            # fail-closed host executor so policy and execution both refuse.
+            process_tools = ProcessTools(
+                config.security.authorized_roots,
+                network_mode=config.security.network_mode.value,
+                max_output=process.max_output_bytes,
+                clean_path=process.clean_path,
+                sandbox_enforced=False,
+                network_policy_enforced=False,
+                max_processes=process.max_processes,
+                max_memory_bytes=process.max_memory_bytes,
+                max_cpu_time_seconds=process.max_cpu_time_seconds,
+                max_timeout=process.max_timeout_seconds,
+            )
+        else:
+            process_tools = DockerProcessTools(
+                config.security.authorized_roots,
+                attestation=attestation,
+                container_user=process.container_user,
+                container_cpus=process.container_cpus,
+                container_tmpfs_bytes=process.container_tmpfs_bytes,
+                container_workspace_bytes=process.container_workspace_bytes,
+                network_mode=config.security.network_mode.value,
+                max_output=process.max_output_bytes,
+                max_processes=process.max_processes,
+                max_memory_bytes=process.max_memory_bytes,
+                max_cpu_time_seconds=process.max_cpu_time_seconds,
+                max_timeout=process.max_timeout_seconds,
+            )
+    else:
+        process_tools = ProcessTools(
+            config.security.authorized_roots,
+            network_mode=config.security.network_mode.value,
+            max_output=process.max_output_bytes,
+            clean_path=process.clean_path,
+            sandbox_enforced=verified_process_sandbox,
+            network_policy_enforced=verified_process_network_policy,
+            max_processes=process.max_processes,
+            max_memory_bytes=process.max_memory_bytes,
+            max_cpu_time_seconds=process.max_cpu_time_seconds,
+            max_timeout=process.max_timeout_seconds,
+        )
+    registry.register_provider(process_tools)
     # Configuration intent alone never opens SSH.  A trusted host adapter must
     # separately attest that its network boundary is restricted to the exact
     # configured targets before the system OpenSSH transport is assembled.
