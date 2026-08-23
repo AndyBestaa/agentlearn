@@ -1,9 +1,10 @@
 """Install the built wheel offline and smoke-test only packaged artifacts.
 
 The regular ``uv sync`` CI step has already populated uv's platform-specific
-cache.  This script creates a genuinely fresh virtual environment and disables
-registry access while installing the local wheel and its locked runtime
-dependencies from that cache.  It never contacts a model provider or SSH host.
+cache.  This script creates a genuinely fresh virtual environment, materializes
+the locked runtime dependencies there from ``uv.lock`` without installing the
+source project, and then installs the local wheel without dependency resolution.
+Every install step is offline.  It never contacts a model provider or SSH host.
 """
 
 from __future__ import annotations
@@ -74,6 +75,33 @@ def _install_offline_with_windows_retry(
             output=completed.stdout,
             stderr=completed.stderr,
         )
+
+
+def _sync_locked_runtime_dependencies(
+    uv: str,
+    *,
+    root: Path,
+    venv: Path,
+    env: dict[str, str],
+) -> None:
+    """Populate a fresh environment from the lock without installing AsterCode."""
+
+    sync_env = dict(env)
+    sync_env["VIRTUAL_ENV"] = str(venv)
+    _run(
+        [
+            uv,
+            "sync",
+            "--directory",
+            str(root),
+            "--active",
+            "--offline",
+            "--frozen",
+            "--no-dev",
+            "--no-install-project",
+        ],
+        env=sync_env,
+    )
 
 
 def _clean_environment() -> dict[str, str]:
@@ -170,8 +198,23 @@ def main() -> int:
 
         _run([uv, "venv", "--python", "3.12", "--clear", str(venv)], env=clean_env)
         python = _python(venv)
+        _sync_locked_runtime_dependencies(
+            uv,
+            root=root,
+            venv=venv,
+            env=clean_env,
+        )
         _install_offline_with_windows_retry(
-            [uv, "pip", "install", "--python", str(python), "--offline", str(wheel)],
+            [
+                uv,
+                "pip",
+                "install",
+                "--python",
+                str(python),
+                "--offline",
+                "--no-deps",
+                str(wheel),
+            ],
             env=clean_env,
         )
         _run([uv, "pip", "check", "--python", str(python)], env=clean_env)
