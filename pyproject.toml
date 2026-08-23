@@ -21,6 +21,7 @@ browser = [
     "playwright==1.62.0",
 ]
 dev = [
+    "pip>=25.2,<27.0",
     "pytest>=8.3,<9.0",
     "pytest-asyncio>=0.25,<1.0",
     "ruff>=0.12,<1.0",

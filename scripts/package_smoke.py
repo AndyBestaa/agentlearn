@@ -1,10 +1,9 @@
-"""Install the built wheel offline and smoke-test only packaged artifacts.
+"""Build a locked wheelhouse, then test the wheel in an offline fresh venv.
 
-The regular ``uv sync`` CI step has already populated uv's platform-specific
-cache.  This script creates a genuinely fresh virtual environment, materializes
-the locked runtime dependencies there from ``uv.lock`` without installing the
-source project, and then installs the local wheel without dependency resolution.
-Every install step is offline.  It never contacts a model provider or SSH host.
+The preparation phase exports exact runtime pins and hashes from ``uv.lock`` and
+downloads current-platform wheels from the canonical Python package index.  The
+verification phase uses only that explicit wheelhouse with index, network and uv
+cache access disabled.  It never contacts a model provider or SSH host.
 """
 
 from __future__ import annotations
@@ -94,30 +93,87 @@ def _run_offline_with_windows_retry(
         )
 
 
-def _sync_locked_runtime_dependencies(
+def _prepare_locked_runtime_wheelhouse(
     uv: str,
     *,
     root: Path,
-    venv: Path,
+    workspace: Path,
+    env: dict[str, str],
+) -> tuple[Path, Path]:
+    """Export lock pins/hashes and download only compatible binary wheels."""
+
+    requirements = workspace / "runtime-requirements.txt"
+    wheelhouse = workspace / "wheelhouse"
+    wheelhouse.mkdir()
+    _run(
+        [
+            uv,
+            "export",
+            "--quiet",
+            "--directory",
+            str(root),
+            "--format",
+            "requirements.txt",
+            "--frozen",
+            "--no-dev",
+            "--no-emit-project",
+            "--no-annotate",
+            "--no-header",
+            "--output-file",
+            str(requirements),
+        ],
+        env=env,
+    )
+    _run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "--isolated",
+            "--quiet",
+            "download",
+            "--require-hashes",
+            "--only-binary",
+            ":all:",
+            "--index-url",
+            "https://pypi.org/simple",
+            "--dest",
+            str(wheelhouse),
+            "--requirement",
+            str(requirements),
+        ],
+        env=env,
+    )
+    return requirements, wheelhouse
+
+
+def _install_locked_runtime_dependencies(
+    uv: str,
+    *,
+    python: Path,
+    requirements: Path,
+    wheelhouse: Path,
     env: dict[str, str],
 ) -> None:
-    """Populate a fresh environment from the lock without installing AsterCode."""
+    """Install runtime dependencies with no index, network or cache access."""
 
-    sync_env = dict(env)
-    sync_env["VIRTUAL_ENV"] = str(venv)
     _run_offline_with_windows_retry(
         [
             uv,
-            "sync",
-            "--directory",
-            str(root),
-            "--active",
+            "pip",
+            "install",
+            "--python",
+            str(python),
             "--offline",
-            "--frozen",
-            "--no-dev",
-            "--no-install-project",
+            "--no-index",
+            "--no-cache",
+            "--require-hashes",
+            "--find-links",
+            str(wheelhouse),
+            "--requirements",
+            str(requirements),
         ],
-        env=sync_env,
+        env=env,
     )
 
 
@@ -215,10 +271,17 @@ def main() -> int:
 
         _run([uv, "venv", "--python", "3.12", "--clear", str(venv)], env=clean_env)
         python = _python(venv)
-        _sync_locked_runtime_dependencies(
+        requirements, wheelhouse = _prepare_locked_runtime_wheelhouse(
             uv,
             root=root,
-            venv=venv,
+            workspace=workspace,
+            env=clean_env,
+        )
+        _install_locked_runtime_dependencies(
+            uv,
+            python=python,
+            requirements=requirements,
+            wheelhouse=wheelhouse,
             env=clean_env,
         )
         _run_offline_with_windows_retry(

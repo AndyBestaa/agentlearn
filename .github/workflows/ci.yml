@@ -51,5 +51,5 @@ jobs:
         run: uv run mypy src tests
       - name: Build wheel and source distribution
         run: uv build
-      - name: Offline wheel install and packaged CLI smoke
+      - name: Locked wheelhouse and offline packaged CLI smoke
         run: uv run python scripts/package_smoke.py
