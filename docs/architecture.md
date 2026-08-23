@@ -21,7 +21,9 @@ OBSERVE → PLAN → POLICY_CHECK → APPROVAL_GATE
 
 ### CLI 层
 
-入口在 `astercode.cli`，命令包括 `init`、`doctor`、`run`、`chat`、`resume`、`status`、`kill`、`sessions`、`memory`、`config`、`permissions`、`audit` 和 `ssh hosts`。`config migrate` 默认只预览 `config_version=1` 规范化结果，只有 `--write` 才会在精确备份和并发冲突检查后原子替换源文件；仓库当前 `config.toml` 保留旧格式作为迁移兼容 fixture，本次不自动覆盖用户配置。CLI 不直接拼接或执行模型给出的 shell；所有动作经过 registry、policy 和 gateway。
+所有公共入口（`aster`、`astercode`、`python -m astercode.cli`）都启用严格模式：启动目录是唯一授权根，宽根/系统树/UNC 被拒绝，项目文件不能开启 live Provider、SSH、网络、浏览器、插件、GUI 或外部状态路径；live 模型只接受用户环境的显式选择。
+
+入口在 `astercode.cli`；兼容命令为 `astercode`，快捷入口 `aster` 在无参数时注入 `chat`，有参数时保留完整命令面。命令包括 `init`、`doctor`、`run`、`chat`、`resume`、`status`、`kill`、`sessions`、`memory`、`config`、`permissions`、`audit` 和 `ssh hosts`。快捷对话最终把规范化启动目录绑定为唯一授权根，并在宿主终端内收集精确审批；普通对话文本不构成批准。新项目使用 `astercode.toml`，旧版 AsterCode `config.toml` 仅在识别到版本和产品字段时兼容，避免误读其他应用的通用配置。`config migrate` 默认只预览 `config_version=1` 规范化结果，只有 `--write` 才会在精确备份和并发冲突检查后原子替换源文件；仓库当前 `config.toml` 保留旧格式作为迁移兼容 fixture，本次不自动覆盖用户配置。CLI 不直接拼接或执行模型给出的 shell；所有动作经过 registry、policy 和 gateway。
 
 `run --stream` 将 provider delta、工具生命周期和完成事件打印为经过脱敏的事件。`--replay` 只读取授权根目录内的 JSON 数组 fixture，禁止疑似秘密和过大输入。run 的默认预算是 40 rounds、100 tool calls、120,000 total tokens、100,000 input tokens、20,000 output tokens 和 3,600 秒；`--max-rounds`、`--max-tool-calls`、`--max-tokens`、`--max-input-tokens`、`--max-output-tokens`、`--max-elapsed-seconds` 可以只覆盖当前 run。
 

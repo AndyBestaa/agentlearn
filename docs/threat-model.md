@@ -41,6 +41,7 @@ AsterCode 要保护：
 | 进程逃逸 | 子进程留存、Ctrl-C 只杀父进程 | Windows `CREATE_SUSPENDED`→Job assignment→resume、`KILL_ON_JOB_CLOSE`、树级 active-process/可选 memory limit、runtime_processes identity token/argv hash、kill switch；POSIX process group | Windows 父子树 Job close/stop 和分配失败不执行目标代码已实机测试；跨进程 Job handle 恢复、远程 kill、POSIX/所有平台完整 Ctrl-C 矩阵仍未验证 |
 | 网络 SSRF/外传 | redirect 到 127.0.0.1、私网、169.254.169.254 | 默认 deny；process/shell 要求运行时证明网络策略已强制执行；Fake Browser 检查 allowlist、redirect、解析地址和 metadata | 没有经验证的 OS egress adapter，`allow_unsandboxed` 审批不能放行，live 网络工具保持 blocked |
 | SSH 劫持 | host key 变化、agent forwarding | 空 allowlist 直接拒绝；known_hosts 和指纹必须匹配；Fake backend 测试硬停止 | 真实 transport/host key 现场未验证 |
+| 恶意项目配置或状态 | 扩大根目录、诱导 live Provider/SSH、伪造 checkpoint 路径/预算、状态文件链接到外部 | 公共 CLI 严格绑定启动目录并重建安全配置；live Provider 只接受用户环境；reconcile 重验路径；恢复预算只可收窄；固定状态与配置拒绝 link/junction/hardlink | 内容文件 hardlink、mount/bind-mount 与跨进程 TOCTOU 仍需 OS sandbox；不要从不可信归档复制 `.astercode` |
 | 浏览器登录态泄露 | 复用用户主 profile、任意下载 | Playwright 使用非持久化 context，不接受用户 profile；JS、下载、权限和 Service Worker 关闭；Fake 使用内存 fixture | 只验证无网络 `about:blank`，登录、下载、提交和 GUI 仍关闭 |
 | 浏览器 DNS/连接竞态 | 允许域名解析为公网，连接时切到私网或 metadata | 每请求/重定向复核 allowlist 与 DNS，并要求独立宿主 egress 证明；未证明时 policy/executor 双层拒绝 | Playwright route 不是 OS 沙箱，真实外网导航保持 blocked |
 | Memory poisoning | 写入“以后允许删生产库” | propose→commit、namespace/TTL/confidence/sensitivity、冲突和 advisory-only | 用户若显式 commit 恶意文本仍会被保存为建议，但不能授权工具 |
@@ -62,7 +63,7 @@ AsterCode 要保护：
 
 ## 离线安全回归范围
 
-当前 fake/replay 测试覆盖：路径逃逸、恶意 argv、秘密 redaction、审批 hash/过期/单次使用、SSH 主机配置与 known_hosts hash 绑定、host key 变化、远程超时、`ssh.start` 未完成语义、`stop_all`/`close` unknown、Browser 私网/metadata/DNS rebinding、Draft 2020-12 扩展 schema/远程引用拒绝/递归参数风险重判、memory 冲突/投毒 advisory-only、process registry/kill switch、审计验证和 SQLite 并发。系统 OpenSSH 回归还覆盖固定 argv/干净环境、专用 known_hosts 派生指纹、默认关闭、空 allowlist 和网络证明双门槛；Playwright 回归覆盖非持久化 context、每请求 route guard 和默认无 egress 拒绝。配置迁移还覆盖预览、精确备份、原子写、并发冲突、future 版本和环境变量不持久化；数据库覆盖 future/gap/伪造版本、关键表列缺失和非 FTS5 preflight。Windows 实机还覆盖 Job Object 父子树 close/stop、树级 active-process/job-memory/累计 CPU-time 限额、assignment 失败时目标 marker 不出现、重复句柄、并发预算和有界双流 capture；另有回归保证 Provider 路线固定、Git P0 无外部驱动/lazy fetch、通用 process/shell 不绕过专用工具、父子预算/取消和不完整 artifact 标记。本轮全量为 `294 passed, 5 skipped`；本机 Edge 离线 smoke 另以显式开关通过，skip 不算能力通过。
+当前 fake/replay 测试覆盖：路径逃逸、恶意 argv、秘密 redaction、审批 hash/过期/单次使用、SSH 主机配置与 known_hosts hash 绑定、host key 变化、远程超时、`ssh.start` 未完成语义、`stop_all`/`close` unknown、Browser 私网/metadata/DNS rebinding、Draft 2020-12 扩展 schema/远程引用拒绝/递归参数风险重判、memory 冲突/投毒 advisory-only、process registry/kill switch、审计验证和 SQLite 并发。系统 OpenSSH 回归还覆盖固定 argv/干净环境、专用 known_hosts 派生指纹、默认关闭、空 allowlist 和网络证明双门槛；Playwright 回归覆盖非持久化 context、每请求 route guard 和默认无 egress 拒绝。配置迁移还覆盖预览、精确备份、原子写、并发冲突、future 版本和环境变量不持久化；数据库覆盖 future/gap/伪造版本、关键表列缺失和非 FTS5 preflight。Windows 实机还覆盖 Job Object 父子树 close/stop、树级 active-process/job-memory/累计 CPU-time 限额、assignment 失败时目标 marker 不出现、重复句柄、并发预算和有界双流 capture；另有回归保证 Provider 路线固定、Git P0 无外部驱动/lazy fetch、通用 process/shell 不绕过专用工具、父子预算/取消和不完整 artifact 标记。本轮全量为 `323 passed, 10 skipped`；历史本机 Edge 离线 smoke 另以显式开关通过，skip 不算能力通过。
 
 审计链当前工作区快照（2026-08-23）为 `valid=true, entries=2707`；这只是会随正常运行增长的验证结果，不代表管理员级不可篡改或固定容量。
 

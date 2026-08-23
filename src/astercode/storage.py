@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sqlite3
+import stat
 import threading
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -460,7 +461,67 @@ class Storage:
         self._initialized = False
         self.last_migration_backup: Path | None = None
 
+    @staticmethod
+    def _guard_local_state_path(
+        path: Path,
+        *,
+        expected: str,
+    ) -> None:
+        """Reject linked/reparsed state paths before any read or write.
+
+        Hard-linked files are rejected because writing the in-workspace name
+        would also mutate a second name outside the workspace.  This is a
+        pre-open guard; callers invoke it again at each persistent I/O boundary.
+        """
+
+        candidate = Path(os.path.abspath(path))
+        for parent in reversed(candidate.parents):
+            is_junction = bool(getattr(parent, "is_junction", lambda: False)())
+            if parent.is_symlink() or is_junction:
+                raise RuntimeError(f"state parent cannot be a link or junction: {parent}")
+            if parent.exists() and not parent.is_dir():
+                raise RuntimeError(f"state parent is not a directory: {parent}")
+        is_junction = bool(getattr(candidate, "is_junction", lambda: False)())
+        if candidate.is_symlink() or is_junction:
+            raise RuntimeError(f"state path cannot be a link or junction: {candidate}")
+        try:
+            info = candidate.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        if expected == "file" and not stat.S_ISREG(info.st_mode):
+            raise RuntimeError(f"state path is not a regular file: {candidate}")
+        if expected == "directory" and not stat.S_ISDIR(info.st_mode):
+            raise RuntimeError(f"state path is not a directory: {candidate}")
+        if expected == "file" and info.st_nlink > 1:
+            raise RuntimeError(f"state file cannot be hard-linked: {candidate}")
+
+    def guard_sqlite_path(self, path: Path) -> None:
+        """Guard a SQLite database and every sidecar SQLite may mutate."""
+
+        self._guard_local_state_path(path, expected="file")
+        for suffix in ("-journal", "-shm", "-wal"):
+            self._guard_local_state_path(Path(f"{path}{suffix}"), expected="file")
+
+    def guard_artifacts_dir(self) -> None:
+        self._guard_local_state_path(
+            self.config.artifacts_dir,
+            expected="directory",
+        )
+
+    def _guard_storage_paths(self) -> None:
+        self.guard_sqlite_path(self.config.database_path)
+        self._guard_local_state_path(
+            self.config.database_path.with_name(
+                self.config.database_path.name + ".migrate.lock"
+            ),
+            expected="file",
+        )
+        self._guard_local_state_path(self.config.audit_jsonl_path, expected="file")
+        self._guard_local_state_path(self._audit_lock_path, expected="file")
+        self.guard_artifacts_dir()
+
     def _connect(self) -> sqlite3.Connection:
+        self.guard_sqlite_path(self.config.database_path)
         self.config.database_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(self.config.database_path), timeout=self.config.busy_timeout_ms / 1000, check_same_thread=False)
         conn.row_factory = sqlite3.Row
@@ -567,6 +628,7 @@ class Storage:
         """Open an existing database read-only and run schema preflight."""
 
         path = self.config.database_path
+        self.guard_sqlite_path(path)
         if not path.exists():
             return 0, False
         if not path.is_file():
@@ -589,6 +651,7 @@ class Storage:
     def initialize(self) -> None:
         if self._initialized:
             return
+        self._guard_storage_paths()
         # The first check happens before the migration lock file or database
         # is touched.  This ensures an older binary cannot change a future or
         # structurally invalid database merely by attempting to start.
@@ -634,6 +697,7 @@ class Storage:
         """Create a transactionally consistent SQLite backup before upgrade."""
 
         backup_dir = self.config.database_path.parent / "backups"
+        self._guard_local_state_path(backup_dir, expected="directory")
         backup_dir.mkdir(parents=True, exist_ok=True)
         stamp = utc_now().strftime("%Y%m%dT%H%M%S%fZ")
         backup = backup_dir / (
@@ -1073,6 +1137,7 @@ class Storage:
 
     def _jsonl_audit_records_locked(self) -> list[dict[str, Any]]:
         path = self.config.audit_jsonl_path
+        self._guard_local_state_path(path, expected="file")
         if not path.exists():
             return []
         records: list[dict[str, Any]] = []
@@ -1160,6 +1225,7 @@ class Storage:
         if not records:
             return
         path = self.config.audit_jsonl_path
+        self._guard_local_state_path(path, expected="file")
         path.parent.mkdir(parents=True, exist_ok=True)
         serialized = b"".join(
             (self._json(record) + "\n").encode("utf-8") for record in records
@@ -1234,6 +1300,7 @@ class Storage:
         """Append one record while serializing the DB and durable mirror writes."""
 
         self._ensure()
+        self._guard_local_state_path(self._audit_lock_path, expected="file")
         audit_lock = InterProcessFileLock(self._audit_lock_path)
         with self._lock, audit_lock.held(
             timeout_seconds=max(1.0, self.config.busy_timeout_ms / 1000)
@@ -1254,6 +1321,7 @@ class Storage:
         """Verify SQLite and JSONL as one uniquely linked logical hash chain."""
 
         self._ensure()
+        self._guard_local_state_path(self._audit_lock_path, expected="file")
         audit_lock = InterProcessFileLock(self._audit_lock_path)
         try:
             with self._lock, audit_lock.held(
@@ -1297,6 +1365,7 @@ class Storage:
         """
 
         self._ensure()
+        self._guard_local_state_path(self._audit_lock_path, expected="file")
         audit_lock = InterProcessFileLock(self._audit_lock_path)
         with self._lock, audit_lock.held(
             timeout_seconds=max(1.0, self.config.busy_timeout_ms / 1000)

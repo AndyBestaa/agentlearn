@@ -6,6 +6,8 @@
 
 ### Added
 
+- Claude Code 风格的 `aster` 快捷入口：在具体项目目录无参数启动持续对话，显示并最终绑定唯一工作区；支持 `/help`、`/status`、`/new`、`/resume`、对话内精确审批和最近多轮用户/助手上下文。`aster`、`astercode` 和模块入口统一执行严格工作区边界，拒绝宽根/系统树/UNC，项目配置不能扩大 Provider、SSH、网络或状态路径权限。新项目配置名为 `astercode.toml`，旧版 AsterCode `config.toml` 继续兼容，其他应用的通用 `config.toml` 不会被误读。
+- 交互与恢复硬化：流式/状态/审批显示转义终端控制和双向文本字符；恢复预算只能收窄当前上限；PRE_TOOL_CALL/TOOL_CALL 不能直接 resume；reconcile 路径重新授权；固定状态和项目配置拒绝 link、junction 与文件 hardlink。
 - M0 产品规格、分层架构、威胁模型、ADR、AGENTS 约定、实施计划和运行时提示词 `prompts/coding_agent.md`。
 - M1 Typer CLI、Pydantic 配置、LangGraph 状态机、预算、Fake Provider、replay fixture、OpenAI Agents SDK/Responses adapter 接口和脱敏流式事件。
 - DeepSeek Provider：使用官方 `https://api.deepseek.com` 上的 OpenAI 兼容 Chat Completions、`json_object` 结构化决策和 `DEEPSEEK_API_KEY` 引用；固定当前 Chat 模型 allowlist，严格校验 usage/唯一终态，流式路径在完整秘密检查后转发并忽略 `reasoning_content`，同时拒绝 Claude Code 的 `[1m]` 模型别名与 Anthropic 端点。
@@ -41,12 +43,13 @@
 
 ### Fixed
 
+- 普通自然语言不再可能越过待审批 interrupt：已有 `waiting_approval` 的 session 必须提交绑定 approval id/action hash/nonce 的宿主终端决策；批准文本不进入模型上下文。快捷对话也拒绝静默授权用户主目录或磁盘根目录，并将状态、artifact 和浏览器下载位置强制限制在启动工作区。
 - 修复 `deny_by_default` 下 `allow_unsandboxed` 审批可能绕过未验证网络边界的问题。普通 process/shell 现在同时要求运行时证明进程沙箱和网络策略均已强制执行；审批不能替代任一 OS 边界。正常生产 CLI 不注入 verified boundary，只有 deterministic 测试或未来完成 attestation 的 host adapter 才能显式注入。
 - 修复 `process.send_input`/`process.stop` 审批后错误接收启动专用参数、重复 `process.start` 句柄碰撞、`communicate()` 无界内存、并发启动突破计数预算，以及 Job 分配失败后的稀有清理遗漏。
 - Git executor 拒绝仓库级 `include/includeIf` 配置，强制禁用 hooks、外部 diff、commit/tag GPG signing、credential helper 和 askpass；恶意仓库 signing 配置回归通过。
 - Git P0 查询进一步拒绝 filter/diff/merge 外部驱动、fsmonitor 和外部 attributes/excludes 配置，设置 `GIT_NO_LAZY_FETCH=1` 并对 diff/show 禁用 external diff/textconv；通用 process/shell 也拒绝绕过受控 Git、SSH、network 和 delete 路径。
 - 修复首次公开 CI 暴露的跨平台差异：Linux mypy 通过运行时检查访问 Windows-only API 并保持 fail-closed；Windows 8.3 临时目录别名改用文件身份比较；GitHub Actions 升级到 Node 24 action 版本。
-- 最终全量回归：`294 passed, 5 skipped`；本机 Edge 离线 smoke 另为 `1 passed, 5 deselected`；skip 不视为能力通过。
+- 最终全量回归：`323 passed, 10 skipped`；历史本机 Edge 离线 smoke 另为 `1 passed, 5 deselected`；skip 不视为能力通过。
 
 ### Not verified / still blocked
 

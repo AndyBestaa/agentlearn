@@ -7,7 +7,7 @@
 | 里程碑 | 状态 | 已交付 | 仍缺 |
 | --- | --- | --- | --- |
 | M0 需求与安全基线 | completed | product spec、architecture、threat model、ADR、AGENTS、runtime prompt、配置模板 | 持续审查文档与实现的一致性 |
-| M1 CLI/Provider/状态机 | partial but runnable | Typer CLI、Pydantic 配置、LangGraph 状态机、Fake/replay、OpenAI Responses 与 DeepSeek Chat adapter；OpenAI/DeepSeek 固定官方 endpoint 且 HTTP `trust_env=false`；Provider 获得剩余时长/output cap、终态复核 usage，cost 不可跟踪时 fail-closed（input token 仅响应后核对）；三次 DeepSeek 只读 smoke；配置 `config_version=1` 迁移 | 真实 OpenAI smoke、更多 DeepSeek 账户/模型与故障回归 |
+| M1 CLI/Provider/状态机 | partial but runnable | Typer CLI、`aster` 无参持续对话入口、对话内精确审批、Pydantic 配置、LangGraph 状态机、Fake/replay、OpenAI Responses 与 DeepSeek Chat adapter；多轮 session 向模型渐进披露最近的用户/助手上下文但排除审批凭证；OpenAI/DeepSeek 固定官方 endpoint 且 HTTP `trust_env=false`；Provider 获得剩余时长/output cap、终态复核 usage，cost 不可跟踪时 fail-closed（input token 仅响应后核对）；三次 DeepSeek 只读 smoke；配置 `config_version=1` 迁移 | 真实 OpenAI smoke、更多 DeepSeek 账户/模型与故障回归 |
 | M2 本地工具 | partial but runnable | fs、受控 process/shell、Git、artifact、原子写、唯一进程句柄、有界双流 capture；process/shell 禁止绕过 Git/SSH/network/delete；Git P0 拒绝外部 filter/diff/hooks/fsmonitor/attrs 并设 `GIT_NO_LAZY_FETCH=1`；artifact 准确标记未保存后缀；Windows Job 约束已实测 | 文件/网络 OS 沙箱、CPU rate/磁盘容量硬限额、跨进程 Job handle 恢复、完整 Linux/PowerShell 7/Windows symlink 矩阵 |
 | M3 Policy/Approval | partial but enforceable | P0-P4 重判、审批 hash/nonce/TTL/单次消费/精确 session grant/撤销、dry-run、脱敏、kill switch、审计哈希链；SSH 审批绑定主机配置与 known_hosts SHA-256；`deny_by_default` 下 `allow_unsandboxed` 不能绕过未验证网络/沙箱边界；历史 smoke 暴露的 JSONL/SQLite 计数不一致已用审计镜像修复并回归（当时 `valid=true, entries=2693`；当前快照 `valid=true, entries=2707`） | 可验证 OS egress、完整文件系统 sandbox、管理员级不可篡改审计 |
 | M4 Memory/Recovery | partial but usable | SQLite WAL/FTS5、schema v7 migrations/backups、三层 memory、edit/conflict/supersedes、字段保留型 checkpoint compaction、跨进程审批恢复、process registry/read-only reconcile、stream/replay；所有写入前 schema preflight 拒绝 future/gap/伪造版本、缺表列和非 FTS5 | 任意外部副作用的自动回滚、远程 reconcile、跨平台旧 PID 回收的 live 证明 |
@@ -22,22 +22,23 @@
 1. CLI 创建 session，LangGraph 运行 `OBSERVE → PLAN → POLICY_CHECK → APPROVAL_GATE → TOOL_CALL → CAPTURE → VERIFY → CHECKPOINT`。
 2. 文件读取/搜索/精确 patch 和 Git diff。
 3. P1/P2/P3 审批暂停、拒绝、单次批准、撤销和跨进程 resume。
-4. 大输出 artifact、秘密脱敏、审计 JSONL/SQLite 哈希链及 `audit verify`。
-5. SQLite schema v1→v7 增量迁移和旧库备份；每次写入前只读 preflight 并在锁内复核 future/gap/伪造版本、缺表列和非 FTS5。
-6. `config_version=1` 配置迁移预览与 `config migrate --write`：精确字节备份、原子替换、源文件冲突检测、future version/旧字段拒绝和环境变量不持久化。
-7. 长期 memory propose/commit/edit/conflict/TTL/namespace/FTS5。
-8. Fake SSH 的 host key 变化、主机配置/known_hosts hash 审批绑定、远程长任务、`ssh.start` 句柄语义、stop_all/close unknown、上传下载 SHA-256。
-9. Fake Browser 的 allowlist、redirect/private/metadata/DNS rebinding、隔离下载和 P3 表单审批。
-10. Fake MCP/Plugin 的精确 pin、Draft 2020-12 schema 严格校验、远程 ref 拒绝、结构预算和真实参数风险重判；无网络 runner。
-11. 只读子代理的根目录、工具集合、深度、并发和预算继承。
-12. 进程 registry 身份验证、同一运行时 kill switch 和安全状态记录。
-13. Provider streaming interface、CLI 生命周期事件和 replay fixture。
-14. Windows Job Object 父子进程树终止、`process.stop`、树级 active-process/job-memory/累计 CPU-time limit 和 assignment-failure marker；它只验证进程树/资源约束，不是文件/网络 sandbox。
-15. process/shell 在未注入 verified sandbox/network policy 时 fail-closed，P2/`allow_unsandboxed` 审批不能越过该边界；deterministic 测试可显式注入两项 verified boundary。
-16. 重复/并发进程获得独立 handle，并发预算不超限；大 stdout/stderr 持续排空且有界，超时后代持有管道时也在有限时间内返回。
-17. OpenAI/DeepSeek endpoint 固定且 `trust_env=false`；Provider/tool 使用剩余时长与输出预算，未知费用 fail-closed，输入 token 响应后核对。
-18. Git P0 禁外部驱动/hook/fsmonitor/attrs 和 lazy fetch；通用 process/shell 不能绕过 Git/SSH/network/delete；artifact 对未保留后缀明确不完整。
-19. 离线只读子代理实时刷新父 usage、原子预扣并合并 child usage，重启对未结算额度保守全扣，支持定向取消和双开关；同进程/live 边界不变。
+4. `aster` 在任意具体项目目录直接进入持续对话；`aster`、`astercode` 和模块入口都由宿主绑定唯一授权根，宽根/系统树/UNC 被拒绝，项目配置不能开启 live Provider、SSH、网络或外部状态路径；审批在终端单独采集，普通自然语言不能代替批准。
+5. 大输出 artifact、秘密脱敏、审计 JSONL/SQLite 哈希链及 `audit verify`。
+6. SQLite schema v1→v7 增量迁移和旧库备份；每次写入前只读 preflight 并在锁内复核 future/gap/伪造版本、缺表列和非 FTS5。
+7. `config_version=1` 配置迁移预览与 `config migrate --write`：精确字节备份、原子替换、源文件冲突检测、future version/旧字段拒绝和环境变量不持久化。
+8. 长期 memory propose/commit/edit/conflict/TTL/namespace/FTS5。
+9. Fake SSH 的 host key 变化、主机配置/known_hosts hash 审批绑定、远程长任务、`ssh.start` 句柄语义、stop_all/close unknown、上传下载 SHA-256。
+10. Fake Browser 的 allowlist、redirect/private/metadata/DNS rebinding、隔离下载和 P3 表单审批。
+11. Fake MCP/Plugin 的精确 pin、Draft 2020-12 schema 严格校验、远程 ref 拒绝、结构预算和真实参数风险重判；无网络 runner。
+12. 只读子代理的根目录、工具集合、深度、并发和预算继承。
+13. 进程 registry 身份验证、同一运行时 kill switch 和安全状态记录。
+14. Provider streaming interface、CLI 生命周期事件和 replay fixture。
+15. Windows Job Object 父子进程树终止、`process.stop`、树级 active-process/job-memory/累计 CPU-time limit 和 assignment-failure marker；它只验证进程树/资源约束，不是文件/网络 sandbox。
+16. process/shell 在未注入 verified sandbox/network policy 时 fail-closed，P2/`allow_unsandboxed` 审批不能越过该边界；deterministic 测试可显式注入两项 verified boundary。
+17. 重复/并发进程获得独立 handle，并发预算不超限；大 stdout/stderr 持续排空且有界，超时后代持有管道时也在有限时间内返回。
+18. OpenAI/DeepSeek endpoint 固定且 `trust_env=false`；Provider/tool 使用剩余时长与输出预算，未知费用 fail-closed，输入 token 响应后核对。
+19. Git P0 禁外部驱动/hook/fsmonitor/attrs 和 lazy fetch；通用 process/shell 不能绕过 Git/SSH/network/delete；artifact 对未保留后缀明确不完整。
+20. 离线只读子代理实时刷新父 usage、原子预扣并合并 child usage，重启对未结算额度保守全扣，支持定向取消和双开关；同进程/live 边界不变。
 
 ## 2026-08-23 现场验证（范围有限）
 
@@ -83,7 +84,7 @@
 
 ## 每次阶段验收命令
 
-本轮最终全量回归为 `294 passed, 5 skipped`；另以显式开关复跑本机 Edge 离线 smoke 为 `1 passed, 5 deselected`。5 个 skip 保持为未满足的平台/权限或 live 条件，不计入已完成能力。
+本轮最终全量回归为 `323 passed, 10 skipped`；另有历史本机 Edge 离线 smoke `1 passed, 5 deselected`。10 个 skip 保持为未满足的平台/权限或 live 条件，不计入已完成能力。
 
 ```powershell
 uv run astercode doctor --root .

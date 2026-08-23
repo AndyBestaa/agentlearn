@@ -1,5 +1,5 @@
 # AsterCode 安全示例配置（UTF-8）。这里不保存 API key、密码、私钥或审批凭证。
-# 复制为项目根目录的 config.toml 后，再按需调整非秘密设置。
+# 复制为项目根目录的 astercode.toml 后，再按需调整非秘密设置。
 
 config_version = 1
 product_name = "AsterCode"
@@ -9,6 +9,8 @@ execution_mode = "inspect_then_implement"
 
 [model]
 provider = "deepseek"
+# 公共 CLI 不接受项目文件替用户开启 live Provider；同时设置用户环境
+# ASTERCODE_MODEL_PROVIDER=deepseek 和 ASTERCODE_MODEL_ID。
 # 不要把 key 写入本文件；这里只保存环境变量名。
 api_key_env = "DEEPSEEK_API_KEY"
 # DeepSeek Chat Completions 只允许官方 HTTPS 根地址；运行时会再次固定并验证。

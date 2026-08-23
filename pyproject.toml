@@ -29,7 +29,8 @@ dev = [
 ]
 
 [project.scripts]
-astercode = "astercode.cli:app"
+astercode = "astercode.entrypoint:astercode_main"
+aster = "astercode.entrypoint:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/astercode"]

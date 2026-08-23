@@ -26,6 +26,34 @@ uv run astercode doctor --root .
 
 状态文件默认在项目内 `.astercode/`，不会自动读取仓库 `.env`、PowerShell profile、bash rc 或个人 SSH 目录。
 
+### 在任意 VS Code 项目中直接输入 `aster`
+
+开发阶段可以把当前源码安装成全局可执行命令；`--editable` 会让后续源码修改立即生效：
+
+```powershell
+cd C:\Users\MT\langgraph-agent
+uv tool install --editable . --force
+uv tool update-shell
+```
+
+完全退出并重新打开 VS Code。随后在任意具体项目目录中运行：
+
+```powershell
+cd C:\path\to\my-project
+aster
+```
+
+无参数 `aster` 会直接进入持续对话；`aster doctor`、`aster run "任务"` 等子命令仍然可用。首次进入尚未初始化的目录时，它会显示规范化后的工作区并询问是否创建 `.astercode/`，不会静默授权用户主目录、磁盘根、系统目录或 UNC，也不会自动向上扩大到 Git 根。`aster` 与兼容命令 `astercode` 都强制把启动目录绑定成唯一 `authorized_root`；项目配置或 `ASTERCODE_PROJECT_ROOT` 不能扩大边界，也不能自行开启 live Provider、SSH、网络、浏览器、插件或桌面控制。live Provider 和模型只能由当前进程继承的用户环境变量明确选择。
+
+新项目配置使用 `astercode.toml`；旧版 AsterCode `config.toml` 仍兼容。普通项目中碰巧存在的同名 `config.toml` 不会再被误当成 AsterCode 配置。若希望任意新项目都默认使用 DeepSeek，可一次性保存非秘密的 Provider/模型选择（API key 仍单独保存在用户环境变量中）：
+
+```powershell
+[Environment]::SetEnvironmentVariable("ASTERCODE_MODEL_PROVIDER", "deepseek", "User")
+[Environment]::SetEnvironmentVariable("ASTERCODE_MODEL_ID", "deepseek-v4-flash", "User")
+```
+
+设置后需要完全重启 VS Code，让新进程继承用户环境变量。对话支持 `/help`、`/status`、`/new`、`/resume SESSION_ID` 和 `/exit`。P1-P3 动作会在终端显示风险、真实路径、参数或补丁，再接受“单次批准 / 当前会话内同一精确动作 / 拒绝 / 暂存”；普通自然语言永远不会被解释为审批。多轮对话会保留最近的用户与助手上下文，但审批 nonce 和凭证不会进入模型上下文。流式输出和恢复状态在显示前会转义终端控制字符；恢复时，旧状态只能收窄当前预算，崩溃中断的动作必须先只读核对。
+
 ## 不设置 API key 的离线运行
 
 可以先不设置 key。Fake Provider 不访问网络：
@@ -50,15 +78,16 @@ API key 不写入代码、TOML、日志、prompt 或命令行参数。配置只�
 
 ```powershell
 $env:OPENAI_API_KEY = "由 OpenAI 控制台新生成的 key"
+$env:ASTERCODE_MODEL_PROVIDER = "openai"
 $env:ASTERCODE_MODEL_ID = "你的账户实际可用模型 ID"
 uv run astercode run "检查代码并提出修复计划" --root .
 ```
 
-Linux bash 使用 `export OPENAI_API_KEY=...` 和 `export ASTERCODE_MODEL_ID=...`。
+Linux bash 使用 `export OPENAI_API_KEY=...`、`export ASTERCODE_MODEL_PROVIDER=openai` 和 `export ASTERCODE_MODEL_ID=...`。
 
 ### DeepSeek
 
-将 `config.toml` 的 `[model]` 设置为：
+配置示例中的 `[model]` 可记录非秘密说明，但公共 CLI 不允许项目文件替用户开启 live Provider：
 
 ```toml
 [model]
@@ -75,7 +104,7 @@ $env:ASTERCODE_MODEL_ID = "deepseek-v4-pro" # 也可以使用 deepseek-v4-flash
 uv run astercode run "检查代码并提出修复计划" --root .
 ```
 
-如果不修改 TOML，也可以额外设置 `$env:ASTERCODE_MODEL_PROVIDER = "deepseek"`。Linux bash 对应使用 `export DEEPSEEK_API_KEY=...`、`export ASTERCODE_MODEL_ID=deepseek-v4-pro` 和可选的 `export ASTERCODE_MODEL_PROVIDER=deepseek`。
+还必须设置 `$env:ASTERCODE_MODEL_PROVIDER = "deepseek"`。Linux bash 对应使用 `export DEEPSEEK_API_KEY=...`、`export ASTERCODE_MODEL_ID=deepseek-v4-pro` 和 `export ASTERCODE_MODEL_PROVIDER=deepseek`。
 
 AsterCode 的 DeepSeek 适配器使用 OpenAI 兼容的 Chat Completions，而不是 OpenAI Responses 或 Anthropic 协议。它把 `base_url` 固定并重新校验为 `https://api.deepseek.com`，请求 `/chat/completions`，以 `response_format={"type":"json_object"}` 获取严格的内部编排决策。`reasoning` 仅接受 `none`、`low`、`high`、`max`。流式响应只消费最终答案的 `content`，明确忽略 `reasoning_content`；内容会先完整通过 JSON、秘密和终止状态校验，再作为 delta 交给 CLI，避免跨分块秘密绕过脱敏。以上接口选择对应 DeepSeek 官方的[首次调用 API](https://api-docs.deepseek.com/zh-cn/)和[创建对话补全](https://api-docs.deepseek.com/api/create-chat-completion)文档。
 
@@ -233,7 +262,7 @@ uv pip check --python .venv\Scripts\python.exe
 
 测试不需要 API key、真实网络或 SSH；使用 deterministic Fake Provider、Fake SSH、Fake Browser、Fake MCP/Plugin、Fake 子代理、临时 Git 仓库和 replay fixture。Windows Job Object 已通过本机父子进程树终止、`process.stop` 和分配失败不执行目标代码测试；这只证明进程树约束，不证明文件/网络隔离。2026-08-23 的 DeepSeek 只读 smoke 已通过，但不替代自动化测试，也没有证明成本、长任务、写操作或真实工具权限安全。Playwright + 本机 Edge 的 `about:blank` 离线 smoke 已通过，但外网导航未运行。Linux 实机 bash、PowerShell 7、真实 OpenAI、真实 SSH、浏览器网络、GUI、MCP/plugin live runner 和 OS 沙箱仍需独立验证。
 
-本轮最终全量回归结果为 `294 passed, 5 skipped`；另以显式开关复跑本机 Edge 离线 smoke 为 `1 passed, 5 deselected`。skip 仍代表缺少相应平台/权限或 live 条件，不应解释成已通过。
+本轮最终全量回归结果为 `323 passed, 10 skipped`；另有历史本机 Edge 离线 smoke `1 passed, 5 deselected`。skip 仍代表缺少相应平台/权限或 live 条件，不应解释成已通过。
 
 ## 常见问题
 

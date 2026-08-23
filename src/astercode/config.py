@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import platform
 import re
+import tempfile
 import tomllib
 from enum import Enum
 from pathlib import Path
@@ -19,6 +20,120 @@ CURRENT_CONFIG_VERSION: Literal[1] = 1
 
 class ConfigError(ValueError):
     """Raised when configuration is missing, malformed, or unsafe."""
+
+
+def validate_strict_workspace_root(value: str | Path) -> Path:
+    """Resolve a convenience-shell workspace without touching broad/remote roots.
+
+    ``aster`` is intended to be launched from one concrete local project.  Its
+    current directory is therefore an authority boundary, not merely a default.
+    Reject network/device paths before resolution so an untrusted argument cannot
+    cause an implicit UNC access while we are still deciding whether it is safe.
+    """
+
+    raw = os.fspath(value)
+    expanded = os.path.expanduser(raw)
+    windows_spelling = expanded.replace("/", "\\")
+    if windows_spelling.startswith("\\\\"):
+        raise ConfigError("strict workspace cannot be a UNC or device path")
+    lexical = Path(os.path.abspath(Path(expanded)))
+    for component in (*reversed(lexical.parents), lexical):
+        is_junction = bool(getattr(component, "is_junction", lambda: False)())
+        if component.is_symlink() or is_junction:
+            raise ConfigError(
+                f"strict workspace cannot traverse a link or junction: {component}"
+            )
+    try:
+        resolved = lexical.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ConfigError(f"strict workspace must be an existing local directory: {value}") from exc
+    if not resolved.is_dir():
+        raise ConfigError(f"strict workspace is not a directory: {resolved}")
+    if str(resolved.drive).startswith("\\\\"):
+        raise ConfigError("strict workspace cannot be a UNC path")
+
+    broad_roots = {
+        Path.home().resolve(),
+        Path.home().resolve().parent,
+        Path(tempfile.gettempdir()).resolve(),
+    }
+    if resolved.anchor:
+        broad_roots.add(Path(resolved.anchor).resolve())
+    protected_trees = {
+        Path(item).expanduser().resolve(strict=False)
+        for item in (
+            os.environ.get("SystemRoot"),
+            os.environ.get("ProgramFiles"),
+            os.environ.get("ProgramFiles(x86)"),
+        )
+        if item
+    }
+    if os.name == "nt" and resolved.drive:
+        drive = Path(f"{resolved.drive}\\")
+        broad_roots.add(drive / "Users")
+        protected_trees.update(
+            {
+                drive / "Program Files",
+                drive / "Program Files (x86)",
+                drive / "ProgramData",
+                drive / "Windows",
+            }
+        )
+    if os.name != "nt":
+        protected_trees.update(
+            Path(item).resolve(strict=False)
+            for item in (
+                "/boot",
+                "/dev",
+                "/etc",
+                "/proc",
+                "/run",
+                "/sys",
+                "/usr",
+                "/var",
+            )
+        )
+    if resolved in broad_roots or any(
+        resolved == protected or protected in resolved.parents
+        for protected in protected_trees
+    ):
+        raise ConfigError(
+            "refusing a broad/system workspace; enter a specific project directory"
+        )
+    return resolved
+
+
+def validate_strict_project_file(value: str | Path, root: str | Path) -> Path:
+    """Resolve one existing project file without crossing a strict workspace."""
+
+    workspace = validate_strict_workspace_root(root)
+    candidate = Path(value).expanduser()
+    spelling = os.fspath(candidate).replace("/", "\\")
+    if spelling.startswith("\\\\"):
+        raise ConfigError("project file cannot be a UNC or device path")
+    if not candidate.is_absolute():
+        candidate = workspace / candidate
+    candidate = Path(os.path.abspath(candidate))
+    try:
+        candidate.relative_to(workspace)
+    except ValueError as exc:
+        raise ConfigError(f"project file escapes the strict workspace: {candidate}") from exc
+    is_junction = bool(getattr(candidate, "is_junction", lambda: False)())
+    if candidate.is_symlink() or is_junction:
+        raise ConfigError(f"project file cannot be a link or junction: {candidate}")
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise ConfigError(f"project file does not exist: {candidate}") from exc
+    try:
+        resolved.relative_to(workspace)
+    except ValueError as exc:
+        raise ConfigError(f"project file escapes the strict workspace: {resolved}") from exc
+    if not resolved.is_file():
+        raise ConfigError(f"project path is not a file: {resolved}")
+    if resolved.stat(follow_symlinks=False).st_nlink > 1:
+        raise ConfigError(f"project file cannot be hard-linked: {resolved}")
+    return resolved
 
 
 class ConfigModel(BaseModel):
@@ -547,6 +662,7 @@ def load_config(
     *,
     project_root: str | Path | None = None,
     environ: Mapping[str, str] | None = None,
+    strict_workspace: bool = False,
 ) -> AppConfig:
     """Load TOML plus a narrow environment overlay.
 
@@ -554,16 +670,32 @@ def load_config(
     obtained by the provider from the configured environment reference.
     """
 
+    strict_root: Path | None = None
+    if strict_workspace:
+        if project_root is None:
+            raise ConfigError("strict_workspace requires an explicit project_root")
+        strict_root = validate_strict_workspace_root(project_root)
+
+    effective_environ = os.environ if environ is None else environ
     data: dict[str, Any] = {}
     if path is not None:
-        config_path = Path(path).expanduser().resolve(strict=True)
+        config_path = (
+            validate_strict_project_file(path, strict_root)
+            if strict_root is not None
+            else Path(path).expanduser().resolve(strict=True)
+        )
         try:
+            if config_path.stat().st_size > 1_048_576:
+                raise ConfigError(f"config exceeds 1 MiB: {config_path}")
             with config_path.open("rb") as handle:
                 parsed = tomllib.load(handle)
-        except (OSError, tomllib.TOMLDecodeError) as exc:
+        except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
             raise ConfigError(f"cannot load config {config_path}: {exc}") from exc
         data = dict(parsed)
-    data = _normalise_legacy_config(data)
+    try:
+        data = _normalise_legacy_config(data)
+    except (OSError, TypeError, ValueError) as exc:
+        raise ConfigError(f"cannot normalize config: {exc}") from exc
     if project_root is not None:
         data["project_root"] = str(project_root)
     model_data = data.get("model")
@@ -575,10 +707,68 @@ def load_config(
     data = _deep_merge(
         data,
         _environment_overlay(
-            environ or os.environ,
+            effective_environ,
             configured_provider=configured_provider,
         ),
     )
+    raw_model_boundary = data.get("model") or {}
+    if not isinstance(raw_model_boundary, Mapping):
+        raise ConfigError("model must be a TOML table")
+    model_boundary = dict(raw_model_boundary)
+    provider_boundary = str(model_boundary.get("provider", "openai")).strip().lower()
+    if provider_boundary in {
+        "deepseek",
+        "deepseek_chat",
+        "deepseek_openai",
+        "deepseek_openai_chat",
+    }:
+        model_boundary["api_key_env"] = "DEEPSEEK_API_KEY"
+    elif provider_boundary != "fake":
+        model_boundary["api_key_env"] = "OPENAI_API_KEY"
+    data["model"] = model_boundary
+    if strict_root is not None:
+        root = strict_root
+        data["project_root"] = str(root)
+        # A repository is untrusted input.  Under the convenience shortcut it
+        # cannot grant itself network, SSH, process, browser, extension, GUI or
+        # subagent capabilities.  The advanced ``astercode`` entrypoint remains
+        # available for deliberately reviewed project configuration.
+        data["security"] = SecurityConfig(
+            authorized_roots=[root],
+            browser=BrowserSecurityConfig(
+                download_dir=root / ".astercode" / "downloads"
+            ),
+        ).model_dump(mode="python")
+        data["features"] = FeatureConfig().model_dump(mode="python")
+        data["budget"] = BudgetConfig().model_dump(mode="python")
+        data["storage"] = StorageConfig(
+            database_path=root / ".astercode" / "astercode.db",
+            audit_jsonl_path=root / ".astercode" / "audit.jsonl",
+            artifacts_dir=root / ".astercode" / "artifacts",
+        ).model_dump(mode="python")
+        strict_environ = effective_environ
+        provider = str(strict_environ.get("ASTERCODE_MODEL_PROVIDER", "")).strip()
+        if not provider:
+            data["model"] = {"provider": "fake"}
+        else:
+            model = dict(
+                _environment_overlay(
+                    strict_environ,
+                    configured_provider=None,
+                ).get("model", {})
+            )
+            model["provider"] = provider
+            deepseek = provider.strip().lower() in {
+                "deepseek",
+                "deepseek_chat",
+                "deepseek_openai",
+                "deepseek_openai_chat",
+            }
+            model["api_key_env"] = (
+                "DEEPSEEK_API_KEY" if deepseek else "OPENAI_API_KEY"
+            )
+            model["base_url"] = "https://api.deepseek.com" if deepseek else None
+            data["model"] = model
     try:
         return AppConfig.model_validate(data)
     except (OSError, ValueError) as exc:
@@ -792,4 +982,6 @@ __all__ = [
     "SubagentSecurityConfig",
     "TargetOS",
     "load_config",
+    "validate_strict_project_file",
+    "validate_strict_workspace_root",
 ]

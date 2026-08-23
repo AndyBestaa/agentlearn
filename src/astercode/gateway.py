@@ -16,7 +16,13 @@ from typing import Any, Mapping
 from .models import ApprovalDecision, ApprovalRequest, ApprovalStatus, RiskLevel, ToolCall, ToolError, ToolResult, ToolStatus, utc_now
 from .orchestrator import GatewayAuthorization, GatewayContext
 from .policy import PolicyEngine
-from .security import canonical_json, canonicalize_authorized_path, redact_secrets, sha256_hex
+from .security import (
+    PathAuthorizationError,
+    canonical_json,
+    canonicalize_authorized_path,
+    redact_secrets,
+    sha256_hex,
+)
 from .tools.base import ToolResult as HostToolResult
 from .tools.registry import ToolRegistry
 
@@ -426,6 +432,7 @@ class LocalToolGateway:
         if self.storage is None:
             return
         artifact_dir = self.storage.config.artifacts_dir
+        self.storage.guard_artifacts_dir()
         artifact_dir.mkdir(parents=True, exist_ok=True)
         for label in ("stdout", "stderr"):
             value = getattr(result, label)
@@ -546,17 +553,29 @@ class LocalToolGateway:
                 except KeyError:
                     pass
 
-    @staticmethod
-    def _path_evidence(paths: list[Any]) -> list[dict[str, Any]]:
+    def _path_evidence(self, paths: list[Any]) -> list[dict[str, Any]]:
         """Capture bounded read-only evidence for crash reconciliation."""
 
         evidence: list[dict[str, Any]] = []
         for raw in paths[:64]:
             if not isinstance(raw, str):
                 continue
-            path = Path(raw)
-            item: dict[str, Any] = {"path": str(path)}
+            item: dict[str, Any] = {"path": raw}
             try:
+                checked = canonicalize_authorized_path(
+                    raw,
+                    self.policy.config.security.authorized_roots,
+                    cwd=self.policy.config.project_root,
+                    must_exist=False,
+                    reject_unc=self.policy.config.security.reject_unc_paths,
+                )
+                checked = checked.revalidate(
+                    self.policy.config.security.authorized_roots,
+                    must_exist=False,
+                    reject_unc=self.policy.config.security.reject_unc_paths,
+                )
+                path = checked.resolved
+                item["path"] = str(path)
                 if not path.exists():
                     item.update(exists=False, kind="missing")
                 elif path.is_file():
@@ -576,6 +595,12 @@ class LocalToolGateway:
                     item.update(exists=True, kind="directory", mtime_ns=stat.st_mtime_ns)
                 else:
                     item.update(exists=True, kind="other")
+            except PathAuthorizationError:
+                item.update(
+                    exists=None,
+                    kind="blocked",
+                    error="outside_authorized_roots",
+                )
             except OSError as exc:
                 item.update(exists=None, error=type(exc).__name__)
             evidence.append(item)

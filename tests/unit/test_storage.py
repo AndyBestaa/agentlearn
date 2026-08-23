@@ -1,12 +1,36 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+from pathlib import Path
 
 import pytest
 
 from astercode.config import AppConfig
 from astercode.storage import Storage
+
+
+def test_storage_rejects_a_hard_linked_database_before_writing(
+    app_config: AppConfig, tmp_path: Path
+) -> None:
+    state = app_config.storage.database_path.parent
+    state.mkdir(parents=True, exist_ok=True)
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-state.db"
+    outside.write_bytes(b"")
+    try:
+        try:
+            os.link(outside, app_config.storage.database_path)
+        except OSError as exc:
+            pytest.skip(f"hard links are unavailable on this host: {exc}")
+
+        with pytest.raises(RuntimeError, match="hard-linked"):
+            Storage(app_config.storage).initialize()
+
+        assert outside.stat().st_size == 0
+    finally:
+        app_config.storage.database_path.unlink(missing_ok=True)
+        outside.unlink(missing_ok=True)
 
 
 def test_storage_enables_wal_and_fts5(app_config: AppConfig, storage: Storage) -> None:

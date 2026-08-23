@@ -145,6 +145,7 @@ class AgentState(TypedDict, total=False):
     approvals: list[dict[str, Any]]
     blockers: list[str]
     messages: list[str]
+    conversation: list[dict[str, str]]
     tool_results: list[dict[str, Any]]
     pending_calls: list[dict[str, Any]]
     current_call: dict[str, Any] | None
@@ -266,6 +267,7 @@ class AsterCodeOrchestrator:
             approvals=[],
             blockers=[],
             messages=[],
+            conversation=[],
             tool_results=[],
             pending_calls=[],
             current_call=None,
@@ -313,11 +315,18 @@ class AsterCodeOrchestrator:
         self,
         session_id: str,
         decision: ApprovalDecision | Mapping[str, Any],
+        *,
+        budget: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         parsed = decision if isinstance(decision, ApprovalDecision) else ApprovalDecision.model_validate(decision)
+        config = self._config(session_id)
+        if budget is not None:
+            snapshot = await self.graph.aget_state(config)
+            if snapshot.values:
+                await self.graph.aupdate_state(config, {"budget": dict(budget)})
         return await self.graph.ainvoke(
             Command(resume=parsed.model_dump(mode="json")),
-            config=self._config(session_id),
+            config=config,
         )
 
     async def cancel(self, session_id: str) -> dict[str, Any]:
@@ -622,12 +631,16 @@ class AsterCodeOrchestrator:
             )
             return update
         messages = list(state.get("messages", []))
+        conversation = list(state.get("conversation", []))
         if response.decision.message:
-            messages.append(str(redact_secrets(response.decision.message)))
+            safe_message = str(redact_secrets(response.decision.message))
+            messages.append(safe_message)
+            conversation.append({"role": "assistant", "content": safe_message})
         update.update(
             usage=usage.model_dump(mode="json"),
             plan=[str(redact_secrets(item)) for item in response.decision.plan],
             messages=messages,
+            conversation=conversation[-16:],
             provider_outcome=response.decision.outcome,
             provider_response_id=response.response_id,
             provider_events=[*state.get("provider_events", []), *stream_events][-128:],
@@ -1258,6 +1271,7 @@ class AsterCodeOrchestrator:
             "risks": state.get("risks", []),
             "blockers": state.get("blockers", []),
             "messages": state.get("messages", [])[-8:],
+            "conversation": state.get("conversation", [])[-16:],
             "tool_results": results,
             "budget": state.get("budget", {}),
             "usage": state.get("usage", {}),
@@ -1275,6 +1289,7 @@ class AsterCodeOrchestrator:
             "completed",
             "pending",
             "active_files",
+            "conversation",
             "tool_results",
             "test_status",
             "approvals",

@@ -20,22 +20,30 @@ import time
 from pathlib import Path
 
 
-def _run(argv: list[str], *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def _run(
+    argv: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    cwd: Path | None = None,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     print("+", subprocess.list2cmdline(argv), flush=True)
     return subprocess.run(
         argv,
         check=True,
         env=env,
+        cwd=cwd,
+        input=input_text,
         text=True,
         encoding="utf-8",
         errors="replace",
     )
 
 
-def _install_offline_with_windows_retry(
+def _run_offline_with_windows_retry(
     argv: list[str], *, env: dict[str, str]
 ) -> None:
-    """Retry one replay-safe install only for a Windows file-lock denial."""
+    """Retry one replay-safe offline operation only for a Windows file lock."""
 
     transient_markers = (
         "access is denied",
@@ -66,7 +74,7 @@ def _install_offline_with_windows_retry(
             marker in combined for marker in transient_markers
         )
         if attempt == 0 and transient:
-            print("transient Windows cache/file lock; retrying offline install once", flush=True)
+            print("transient Windows cache/file lock; retrying offline operation once", flush=True)
             time.sleep(0.5)
             continue
         raise subprocess.CalledProcessError(
@@ -88,7 +96,7 @@ def _sync_locked_runtime_dependencies(
 
     sync_env = dict(env)
     sync_env["VIRTUAL_ENV"] = str(venv)
-    _run(
+    _run_offline_with_windows_retry(
         [
             uv,
             "sync",
@@ -127,10 +135,10 @@ def _wheel(root: Path) -> Path:
     return wheels[0].resolve()
 
 
-def _entrypoint(venv: Path) -> Path:
-    candidate = venv / ("Scripts/astercode.exe" if os.name == "nt" else "bin/astercode")
+def _entrypoint(venv: Path, name: str) -> Path:
+    candidate = venv / (f"Scripts/{name}.exe" if os.name == "nt" else f"bin/{name}")
     if not candidate.is_file():
-        raise RuntimeError(f"wheel did not install the astercode entrypoint: {candidate}")
+        raise RuntimeError(f"wheel did not install the {name} entrypoint: {candidate}")
     return candidate
 
 
@@ -204,7 +212,7 @@ def main() -> int:
             venv=venv,
             env=clean_env,
         )
-        _install_offline_with_windows_retry(
+        _run_offline_with_windows_retry(
             [
                 uv,
                 "pip",
@@ -219,8 +227,10 @@ def main() -> int:
         )
         _run([uv, "pip", "check", "--python", str(python)], env=clean_env)
 
-        astercode = _entrypoint(venv)
+        astercode = _entrypoint(venv, "astercode")
+        aster = _entrypoint(venv, "aster")
         _run([str(astercode), "--help"], env=clean_env)
+        _run([str(aster), "--help"], env=clean_env)
         config = _write_fake_config(project)
         _run(
             [
@@ -234,6 +244,8 @@ def main() -> int:
             ],
             env=clean_env,
         )
+        (project / ".astercode").mkdir()
+        _run([str(aster)], env=clean_env, cwd=project, input_text="/exit\n")
         _verify_packaged_prompt(
             python,
             root / "prompts" / "coding_agent.md",

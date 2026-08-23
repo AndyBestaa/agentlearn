@@ -9,14 +9,22 @@ import platform
 import shutil
 import sys
 import tempfile
+import tomllib
+import unicodedata
 from pathlib import Path
-from typing import Any, Coroutine
+from typing import Any, Coroutine, Mapping
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from .config import ConfigError, load_config
+from .config import (
+    AppConfig,
+    ConfigError,
+    load_config,
+    validate_strict_project_file,
+    validate_strict_workspace_root,
+)
 from .config_migration import ConfigMigrationError, migrate_config_file
 from .security import PathAuthorizationError, canonicalize_authorized_path, contains_probable_secret
 
@@ -37,6 +45,7 @@ app.add_typer(audit_app, name="audit")
 ssh_app.add_typer(ssh_hosts_app, name="hosts")
 
 console = Console()
+_STRICT_SHORTCUT = False
 
 
 def _run_sync(coro: Coroutine[Any, Any, Any]) -> Any:
@@ -47,16 +56,134 @@ def _run_sync(coro: Coroutine[Any, Any, Any]) -> Any:
 
 
 def _root(value: Path | None) -> Path:
-    return (value or Path.cwd()).expanduser().resolve()
+    candidate = value or Path.cwd()
+    if _STRICT_SHORTCUT:
+        try:
+            return validate_strict_workspace_root(candidate)
+        except ConfigError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+    return candidate.expanduser().resolve()
+
+
+def _terminal_safe(value: Any) -> str:
+    """Render untrusted text without terminal control or bidi spoofing."""
+
+    output: list[str] = []
+    for character in str(value):
+        codepoint = ord(character)
+        if character in {"\n", "\t"}:
+            output.append(character)
+        elif codepoint < 32 or codepoint == 127 or 128 <= codepoint <= 159:
+            output.append(f"\\x{codepoint:02x}")
+        elif unicodedata.category(character) == "Cf":
+            output.append(f"\\u{codepoint:04x}")
+        else:
+            output.append(character)
+    return "".join(output)
+
+
+def _looks_like_astercode_config(path: Path) -> bool:
+    """Recognize the legacy generic filename without swallowing another app's TOML."""
+
+    try:
+        if not path.is_file() or path.stat().st_size > 1_048_576:
+            return False
+        with path.open("rb") as handle:
+            data = tomllib.load(handle)
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError):
+        return False
+    product = data.get("product")
+    versioned = (
+        type(data.get("config_version")) is int
+        and data.get("config_version") == 1
+        and str(data.get("product_name", "")).strip().casefold() == "astercode"
+    )
+    legacy = (
+        isinstance(product, Mapping)
+        and str(product.get("name", "")).strip().casefold() == "astercode"
+        and all(isinstance(data.get(key), Mapping) for key in ("model", "security"))
+    )
+    return versioned or legacy
+
+
+def _discover_config(root: Path) -> Path | None:
+    state = root / ".astercode"
+    state_is_junction = bool(getattr(state, "is_junction", lambda: False)())
+    if state.is_symlink() or state_is_junction:
+        raise ConfigError(f"state directory cannot be a link or junction: {state}")
+    if state.exists() and not state.is_dir():
+        raise ConfigError(f"state path must be a directory: {state}")
+    for candidate in (root / "astercode.toml", root / ".astercode" / "config.toml"):
+        is_junction = bool(getattr(candidate, "is_junction", lambda: False)())
+        if candidate.is_symlink() or is_junction:
+            raise ConfigError(f"project config cannot be a link or junction: {candidate}")
+        if candidate.is_file():
+            if candidate.stat(follow_symlinks=False).st_nlink > 1:
+                raise ConfigError(f"project config cannot be hard-linked: {candidate}")
+            resolved = candidate.resolve(strict=True)
+            try:
+                resolved.relative_to(root)
+            except ValueError as exc:
+                raise ConfigError(f"project config escapes the workspace: {candidate}") from exc
+            return resolved
+    legacy = root / "config.toml"
+    legacy_is_junction = bool(getattr(legacy, "is_junction", lambda: False)())
+    if legacy.is_symlink() or legacy_is_junction:
+        raise ConfigError(f"legacy project config cannot be a link or junction: {legacy}")
+    if legacy.is_file() and legacy.stat(follow_symlinks=False).st_nlink > 1:
+        raise ConfigError(f"legacy project config cannot be hard-linked: {legacy}")
+    return legacy if _looks_like_astercode_config(legacy) else None
+
+
+def _atomic_write_bytes(path: Path, payload: bytes) -> None:
+    """Replace one project file without writing through an existing hard link."""
+
+    temporary: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary = stream.name
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary is not None:
+            Path(temporary).unlink(missing_ok=True)
 
 
 def _config(root: Path, config_file: Path | None = None):
-    selected = config_file
-    if selected is None:
-        candidate = root / "config.toml"
-        if candidate.is_file():
-            selected = candidate
+    if _STRICT_SHORTCUT:
+        environment = dict(os.environ)
+        environment.pop("ASTERCODE_PROJECT_ROOT", None)
+        return load_config(
+            config_file or _discover_config(root),
+            project_root=root,
+            environ=environment,
+            strict_workspace=True,
+        )
+    selected = config_file or _discover_config(root)
     return load_config(selected, project_root=root)
+
+
+def _chat_config(root: Path) -> AppConfig:
+    """Bind the convenience shell to its launch directory as final authority."""
+
+    environment = dict(os.environ)
+    environment.pop("ASTERCODE_PROJECT_ROOT", None)
+    config = load_config(
+        _discover_config(root),
+        project_root=root,
+        environ=environment,
+        strict_workspace=True,
+    )
+    return config
 
 
 def _storage(cfg):
@@ -125,8 +252,13 @@ def init(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), force
     root = _root(root)
     root.mkdir(parents=True, exist_ok=True)
     state = root / ".astercode"
+    state_is_junction = bool(getattr(state, "is_junction", lambda: False)())
+    if state.is_symlink() or state_is_junction:
+        raise typer.BadParameter(".astercode must not be a link or junction")
+    if state.exists() and not state.is_dir():
+        raise typer.BadParameter(".astercode must be a real local directory")
     state.mkdir(exist_ok=True)
-    config_path = root / "config.toml"
+    config_path = _discover_config(root) or (root / "astercode.toml")
     if config_path.exists() and not force:
         typer.echo(f"已存在，未覆盖: {config_path}")
     elif not config_path.exists() or force:
@@ -134,11 +266,15 @@ def init(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), force
         packaged_template = Path(__file__).resolve().with_name("config.example.toml")
         template = source_template if source_template.exists() else packaged_template
         if template.exists():
-            config_path.write_bytes(template.read_bytes())
+            _atomic_write_bytes(config_path, template.read_bytes())
         else:
-            config_path.write_text(_minimal_config(root), encoding="utf-8")
+            _atomic_write_bytes(config_path, _minimal_config(root).encode("utf-8"))
         typer.echo(f"已创建: {config_path}")
-    cfg = _config(root, config_path if config_path.exists() else None)
+    cfg = (
+        _chat_config(root)
+        if _STRICT_SHORTCUT
+        else _config(root, config_path if config_path.exists() else None)
+    )
     storage = _storage(cfg)
     storage.initialize()
     typer.echo(f"数据库: {cfg.storage.database_path}")
@@ -283,7 +419,7 @@ def run_task(
         raise typer.Exit(code=2)
 
 
-def _run_task_impl(task: str, *, root: Path, session_id: str | None, fake: bool, auto_approve: bool, stream: bool = False, replay: Path | None = None, dry_run: bool = False, budget_overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+def _run_task_impl(task: str, *, root: Path, session_id: str | None, fake: bool, auto_approve: bool, stream: bool = False, replay: Path | None = None, dry_run: bool = False, budget_overrides: dict[str, Any] | None = None, strict_workspace: bool = False) -> dict[str, Any]:
     """Synchronous boundary used by Typer and interactive chat."""
 
     return _run_sync(
@@ -297,15 +433,16 @@ def _run_task_impl(task: str, *, root: Path, session_id: str | None, fake: bool,
             replay=replay,
             dry_run=dry_run,
             budget_overrides=budget_overrides,
+            strict_workspace=strict_workspace,
         )
     )
 
 
-async def _run_task_async(task: str, *, root: Path, session_id: str | None, fake: bool, auto_approve: bool, stream: bool = False, replay: Path | None = None, dry_run: bool = False, budget_overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+async def _run_task_async(task: str, *, root: Path, session_id: str | None, fake: bool, auto_approve: bool, stream: bool = False, replay: Path | None = None, dry_run: bool = False, budget_overrides: dict[str, Any] | None = None, strict_workspace: bool = False) -> dict[str, Any]:
     """Async task core; callers that already own a loop can await it directly."""
 
     root = _root(root)
-    cfg = _config(root)
+    cfg = _chat_config(root) if strict_workspace else _config(root)
     from .provider import DeterministicFakeProvider
     from .runtime import Orchestrator, build_registry
 
@@ -336,18 +473,7 @@ async def _run_task_async(task: str, *, root: Path, session_id: str | None, fake
     def show_event(event: Any) -> None:
         if not stream:
             return
-        event_type = str(event.get("event", "event")) if isinstance(event, dict) else "event"
-        if event_type == "provider.delta" and isinstance(event, dict):
-            console.print(str(event.get("delta", "")), end="", markup=False, highlight=False)
-            return
-        if event_type == "provider.completed":
-            console.print()
-        details = {
-            key: event[key]
-            for key in ("tool", "attempt", "response_id")
-            if isinstance(event, dict) and event.get(key) is not None
-        }
-        console.print(f"[dim]{event_type} {json.dumps(details, ensure_ascii=False)}[/dim]")
+        _print_stream_event(event)
 
     orchestrator = Orchestrator(
         cfg,
@@ -368,23 +494,348 @@ async def _run_task_async(task: str, *, root: Path, session_id: str | None, fake
         await orchestrator.close()
 
 
-@app.command()
-def chat(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), fake: bool = typer.Option(False, "--fake")) -> None:
-    """Interactive multi-turn shell; Ctrl-C exits without starting a new tool."""
-    typer.echo("AsterCode chat；输入 exit/quit 结束。")
-    session_id: str | None = None
+def _print_stream_event(event: Any) -> None:
+    """Render one untrusted provider/tool event without terminal controls."""
+
+    event_type = str(event.get("event", "event")) if isinstance(event, dict) else "event"
+    if event_type == "provider.delta" and isinstance(event, dict):
+        console.print(
+            _terminal_safe(event.get("delta", "")),
+            end="",
+            markup=False,
+            highlight=False,
+        )
+        return
+    if event_type == "provider.completed":
+        console.print()
+    details = {
+        key: event[key]
+        for key in ("tool", "attempt", "response_id")
+        if isinstance(event, dict) and event.get(key) is not None
+    }
+    line = f"{event_type} {json.dumps(details, ensure_ascii=False, default=str)}"
+    console.print(_terminal_safe(line), style="dim", markup=False, highlight=False)
+
+
+def _prepare_chat_workspace(root: Path) -> None:
+    try:
+        root = validate_strict_workspace_root(root)
+    except ConfigError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    state = root / ".astercode"
+    is_junction = bool(getattr(state, "is_junction", lambda: False)())
+    if state.is_symlink() or is_junction:
+        raise typer.BadParameter(".astercode must not be a link or junction")
+    if state.exists():
+        if not state.is_dir():
+            raise typer.BadParameter(".astercode must be a real local directory")
+        return
+    if not sys.stdin.isatty():
+        raise typer.BadParameter(
+            f"workspace is not initialized; run 'aster init --root {root}' first"
+        )
+    console.print("Aster 将只在此目录保存状态并执行操作：")
+    console.print(_terminal_safe(root), style="bold", markup=False)
+    if not typer.confirm(_terminal_safe(f"创建 {state} 并进入对话？"), default=False):
+        raise typer.Exit()
+    state.mkdir(parents=False, exist_ok=False)
+
+
+def _chat_help() -> None:
+    console.print(
+        "[bold]对话命令[/bold]\n"
+        "  /help              显示帮助\n"
+        "  /status            查看当前会话状态\n"
+        "  /new               开始新会话\n"
+        "  /resume SESSION_ID 切换到已有会话\n"
+        "  /exit              退出（也支持 exit、quit、:q）"
+    )
+
+
+def _print_chat_result(result: Mapping[str, Any], seen_actions: set[str]) -> None:
+    for item in result.get("tool_results", []) if isinstance(result.get("tool_results"), list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        action_id = str(item.get("action_id", ""))
+        if action_id and action_id in seen_actions:
+            continue
+        if action_id:
+            seen_actions.add(action_id)
+        console.print(
+            _terminal_safe(
+                f"工具 {item.get('tool', 'unknown')}: {item.get('status', 'unknown')}"
+            ),
+            style="dim",
+            markup=False,
+        )
+    messages = result.get("messages", [])
+    if isinstance(messages, list) and messages:
+        console.print("Aster> ", style="bold cyan", end="")
+        console.print(_terminal_safe(messages[-1]), markup=False, highlight=False)
+    status = str(result.get("status", "unknown"))
+    if status not in {"completed", "running"}:
+        console.print(
+            _terminal_safe(f"状态：{status}"),
+            style="yellow",
+            markup=False,
+        )
+    blockers = result.get("blockers", [])
+    if isinstance(blockers, list):
+        for blocker in blockers[-3:]:
+            console.print(_terminal_safe(f"提示：{blocker}"), style="yellow", markup=False)
+
+
+def _prompt_approval(request: Mapping[str, Any]) -> dict[str, Any] | None:
+    risk = str(request.get("risk", "unknown"))
+    console.print("\n[bold yellow]需要你的审批[/bold yellow]")
+    console.print(
+        _terminal_safe(
+            f"风险：{risk}    工具：{request.get('tool')}    主机：{request.get('host', 'local')}"
+        ),
+        markup=False,
+    )
+    if request.get("cwd"):
+        console.print(_terminal_safe(f"目录：{request['cwd']}"), markup=False)
+    paths = request.get("real_paths", [])
+    if isinstance(paths, list) and paths:
+        console.print(
+            _terminal_safe("路径：" + ", ".join(str(item) for item in paths)),
+            markup=False,
+        )
+    console.print(_terminal_safe(f"目的：{request.get('purpose', '')}"), markup=False)
+    effects = request.get("side_effects", [])
+    if isinstance(effects, list) and effects:
+        console.print(
+            _terminal_safe("副作用：" + ", ".join(str(item) for item in effects)),
+            markup=False,
+        )
+    for label, key in (
+        ("端口", "port"),
+        ("用户", "user"),
+        ("主机指纹", "host_fingerprint"),
+        ("网络目标", "network_destination"),
+        ("验证方式", "validation"),
+        ("备份", "backup"),
+        ("回滚", "rollback"),
+        ("到期时间", "expires_at"),
+        ("动作哈希", "action_hash"),
+        ("补丁哈希", "diff_hash"),
+    ):
+        if request.get(key):
+            console.print(_terminal_safe(f"{label}：{request[key]}"), markup=False)
+    normalized = request.get("normalized_action")
+    if isinstance(normalized, Mapping):
+        arguments = normalized.get("arguments")
+        if isinstance(arguments, Mapping) and isinstance(arguments.get("patch"), str):
+            patch = str(arguments["patch"])
+            console.print("[bold]拟应用的补丁：[/bold]")
+            console.print(_terminal_safe(patch), markup=False, highlight=False)
+        elif arguments is not None:
+            console.print("动作参数：")
+            console.print(
+                _terminal_safe(json.dumps(arguments, ensure_ascii=False, default=str)),
+                markup=False,
+                highlight=False,
+            )
+    session_allowed = risk in {"P1", "P2"}
+    choices = "[a] 仅批准这一次"
+    if session_allowed:
+        choices += "  [s] 本会话批准同一个精确动作"
+    choices += "  [d] 拒绝  [q] 暂时保留"
     while True:
         try:
-            message = typer.prompt("你")
+            choice = typer.prompt(choices, default="q").strip().lower()
         except (KeyboardInterrupt, EOFError):
-            typer.echo("\n已取消")
+            return None
+        if choice in {"q", "quit", "leave"}:
+            return None
+        if choice in {"a", "approve", "y", "yes"}:
+            approved, scope = True, "once"
+            break
+        if session_allowed and choice in {"s", "session"}:
+            approved, scope = True, "session"
+            break
+        if choice in {"d", "deny", "n", "no"}:
+            approved, scope = False, "once"
+            break
+        console.print("请输入 a、s、d 或 q。")
+    decision = {
+        key: request[key]
+        for key in ("approval_id", "action_id", "action_hash", "nonce")
+    }
+    decision.update(
+        approved=approved,
+        scope=scope,
+        reason="interactive terminal decision",
+        actor="authenticated_terminal_user",
+    )
+    return decision
+
+
+def _resume_chat_session(root: Path, session_id: str, decision: Mapping[str, Any]) -> dict[str, Any]:
+    from .runtime import Orchestrator
+
+    cfg = _chat_config(root)
+    storage = _storage(cfg)
+    storage.initialize()
+    return _run_sync(
+        Orchestrator.resume_from_storage(cfg, storage, session_id, decision)
+    )
+
+
+def _chat_session_status(root: Path, session_id: str) -> Mapping[str, Any]:
+    cfg = _chat_config(root)
+    storage = _storage(cfg)
+    storage.initialize()
+    return storage.get_session(session_id)
+
+
+def _reconcile_chat_session(root: Path, session_id: str) -> dict[str, Any]:
+    from .runtime import Orchestrator
+
+    cfg = _chat_config(root)
+    storage = _storage(cfg)
+    storage.initialize()
+    return Orchestrator(cfg, storage=storage).reconcile(session_id)
+
+
+@app.command()
+def chat(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), fake: bool = typer.Option(False, "--fake")) -> None:
+    """Interactive multi-turn shell with host-side approval prompts."""
+
+    root = _root(root)
+    _prepare_chat_workspace(root)
+    cfg = _chat_config(root)
+    key_present = bool(os.environ.get(cfg.model.api_key_env))
+    if not fake and cfg.model.provider != "fake":
+        missing: list[str] = []
+        if not cfg.model.model_id:
+            missing.append("model ID")
+        if not key_present:
+            missing.append(cfg.model.api_key_env)
+        if missing:
+            console.print(
+                _terminal_safe(
+                    "实时模型尚未就绪：缺少 " + ", ".join(missing)
+                ),
+                style="red",
+                markup=False,
+            )
+            raise typer.Exit(code=2)
+    console.print("[bold]AsterCode 对话模式[/bold]")
+    console.print("工作区：", end="")
+    console.print(_terminal_safe(root), style="bold", markup=False)
+    console.print(
+        _terminal_safe(
+            f"授权范围：{', '.join(str(item) for item in cfg.security.authorized_roots)}"
+        ),
+        markup=False,
+    )
+    provider = "fake" if fake else cfg.model.provider
+    console.print(
+        _terminal_safe(
+            f"模型：{provider}/{cfg.model.model_id or '未设置'}    "
+            f"Key：{'PRESENT' if key_present else 'UNSET'}"
+        ),
+        markup=False,
+    )
+    console.print("输入 /help 查看命令；输入 /exit 或按 Ctrl-C 退出。\n")
+    session_id: str | None = None
+    session_locked = False
+    seen_actions: set[str] = set()
+    pending_result: dict[str, Any] | None = None
+    while True:
+        try:
+            message = typer.prompt("你").strip()
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n已退出；不会启动新的工具调用。")
             return
-        if message.strip().lower() in {"exit", "quit", ":q"}:
+        if not message:
+            continue
+        lowered = message.lower()
+        if lowered in {"exit", "quit", ":q", "/exit", "/quit"}:
             return
-        # Reuse the one-shot path so every turn goes through the same policy.
-        result = _run_task_impl(message, root=_root(root), session_id=session_id, fake=fake, auto_approve=False, stream=True)
-        session_id = str(result.get("session_id") or session_id or "") or None
-        console.print_json(json.dumps(result, ensure_ascii=False, default=str))
+        if lowered == "/help":
+            _chat_help()
+            continue
+        if lowered == "/new":
+            session_id = None
+            session_locked = False
+            pending_result = None
+            seen_actions.clear()
+            console.print("已开始新会话。")
+            continue
+        if lowered == "/status":
+            if session_id is None:
+                console.print("当前还没有会话。")
+            else:
+                console.print_json(
+                    json.dumps(_chat_session_status(root, session_id), ensure_ascii=False, default=str)
+                )
+            continue
+        if lowered.startswith("/resume "):
+            candidate = message.split(maxsplit=1)[1].strip()
+            try:
+                record = _chat_session_status(root, candidate)
+            except (KeyError, ValueError):
+                console.print(_terminal_safe(f"未找到会话：{candidate}"), markup=False)
+                continue
+            session_id = candidate
+            session_locked = False
+            state = record.get("state", {})
+            pending_result = dict(state) if isinstance(state, Mapping) else None
+            console.print(
+                _terminal_safe(f"已切换到会话 {candidate}（状态：{record.get('status')}）。"),
+                markup=False,
+            )
+            if str(record.get("status")) not in {
+                "completed",
+                "partial",
+                "blocked",
+                "cancelled",
+                "failed",
+                "waiting_approval",
+            }:
+                pending_result = _reconcile_chat_session(root, candidate)
+                session_locked = True
+                _print_chat_result(pending_result, seen_actions)
+                console.print("该会话必须先完成只读核对，当前不会接受新的自然语言动作。")
+        else:
+            if session_locked:
+                console.print("当前会话因未确认的动作边界而锁定；请先审查证据，或输入 /new 开始新会话。")
+                continue
+            console.print("[dim]Aster 正在处理…[/dim]")
+            try:
+                pending_result = _run_task_impl(
+                    message,
+                    root=root,
+                    session_id=session_id,
+                    fake=fake,
+                    auto_approve=False,
+                    stream=False,
+                    strict_workspace=True,
+                )
+            except (ConfigError, OSError, ValueError) as exc:
+                console.print(_terminal_safe(f"本轮失败：{exc}"), style="red", markup=False)
+                continue
+            session_id = str(pending_result.get("session_id") or session_id or "") or None
+            if isinstance(pending_result.get("reconcile"), Mapping):
+                session_locked = True
+            _print_chat_result(pending_result, seen_actions)
+        while pending_result is not None and pending_result.get("status") == "waiting_approval":
+            request = pending_result.get("approval_request")
+            if not isinstance(request, Mapping) or session_id is None:
+                console.print("[red]审批状态缺少完整绑定信息，已停止。[/red]")
+                break
+            decision = _prompt_approval(request)
+            if decision is None:
+                console.print(
+                    _terminal_safe(f"审批仍待处理。稍后可输入 /resume {session_id}。"),
+                    markup=False,
+                )
+                break
+            pending_result = _resume_chat_session(root, session_id, decision)
+            _print_chat_result(pending_result, seen_actions)
 
 
 @app.command()
@@ -592,7 +1043,12 @@ def config_migrate(
     """Preview a versioned config migration; write only with --write."""
 
     project_root = _root(root)
-    selected = config_file or (project_root / "config.toml")
+    selected = config_file or _discover_config(project_root) or (project_root / "astercode.toml")
+    if _STRICT_SHORTCUT:
+        try:
+            selected = validate_strict_project_file(selected, project_root)
+        except ConfigError as exc:
+            raise typer.BadParameter(str(exc)) from exc
     try:
         result = migrate_config_file(
             selected,
@@ -751,4 +1207,7 @@ def _minimal_config(root: Path) -> str:
 
 
 if __name__ == "__main__":
+    # ``python -m astercode.cli`` is a public CLI path too; do not leave it as
+    # an escape hatch around the strict workspace boundary.
+    _STRICT_SHORTCUT = True
     app()

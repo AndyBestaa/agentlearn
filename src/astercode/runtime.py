@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import math
 from typing import Any, Callable, Literal, Mapping, cast
 
 from .config import AppConfig
@@ -41,6 +42,43 @@ from .tools.playwright_browser import PlaywrightEdgeBackend
 from .tools.process import ProcessTools
 from .tools.registry import ToolRegistry
 from .tools.ssh import SSHTools
+
+
+def _clamp_persisted_budget(
+    configured: Mapping[str, Any],
+    stored: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Restore only valid limits that are no wider than current policy."""
+
+    integer_fields = {
+        "max_rounds",
+        "max_tool_calls",
+        "max_tokens",
+        "max_input_tokens",
+        "max_output_tokens",
+        "max_concurrency",
+    }
+    result: dict[str, Any] = {}
+    for key, ceiling in configured.items():
+        candidate = stored.get(key)
+        if candidate is None:
+            result[key] = ceiling
+            continue
+        if key in integer_fields:
+            valid = isinstance(candidate, int) and not isinstance(candidate, bool)
+        else:
+            valid = (
+                isinstance(candidate, (int, float))
+                and not isinstance(candidate, bool)
+                and math.isfinite(float(candidate))
+            )
+        if not valid or candidate <= 0:
+            result[key] = ceiling
+        elif ceiling is None:
+            result[key] = candidate
+        else:
+            result[key] = min(ceiling, candidate)
+    return result
 
 
 def build_registry(
@@ -246,6 +284,7 @@ class Orchestrator:
         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
         checkpoint_path = self.config.storage.database_path.with_name("langgraph-checkpoints.db")
+        self.storage.guard_sqlite_path(checkpoint_path)
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         self._checkpoint_connection = await aiosqlite.connect(str(checkpoint_path))
         self._checkpointer = AsyncSqliteSaver(self._checkpoint_connection)
@@ -277,6 +316,41 @@ class Orchestrator:
         safe_goal = str(redact_secrets(goal))
         session = self.storage.create_session(str(self.config.project_root), safe_goal, session_id=session_id) if session_id is None else self.storage.get_session(session_id)
         sid = session["session_id"]
+        stored_state = session.get("state", {})
+        if session_id is not None and str(session.get("status")) == SessionStatus.WAITING_APPROVAL.value:
+            # A natural-language message is never an approval.  Preserve the
+            # exact interrupt so the terminal UI can collect a bound decision.
+            if isinstance(stored_state, Mapping):
+                return dict(stored_state)
+            return {
+                "session_id": sid,
+                "status": SessionStatus.WAITING_APPROVAL.value,
+                "blockers": ["the session has an unresolved approval request"],
+                "next_action": "approve, deny, or leave the exact request pending",
+            }
+        terminal_statuses = {
+            SessionStatus.COMPLETED.value,
+            SessionStatus.PARTIAL.value,
+            SessionStatus.BLOCKED.value,
+            SessionStatus.CANCELLED.value,
+            SessionStatus.FAILED.value,
+        }
+        checkpoint = self.storage.latest_checkpoint(sid) if session_id is not None else None
+        checkpoint_phase = (
+            str(checkpoint.get("phase", "")).upper()
+            if isinstance(checkpoint, Mapping)
+            else ""
+        )
+        unresolved_boundary = checkpoint_phase in {"PRE_TOOL_CALL", "TOOL_CALL"}
+        if session_id is not None and (
+            str(session.get("status")) not in terminal_statuses or unresolved_boundary
+        ):
+            reconciled = self.reconcile(sid)
+            reconciled["blockers"] = [
+                *reconciled.get("blockers", []),
+                "the existing session is non-terminal or has an unresolved action boundary; natural language cannot resume or overwrite it",
+            ]
+            return reconciled
         self.storage.save_turn(sid, "user", safe_goal)
         core = await self._ensure_core()
         configured_budget: dict[str, Any] = {
@@ -296,6 +370,21 @@ class Orchestrator:
             session_id=sid,
             budget=configured_budget,
         )
+        conversation: list[dict[str, str]] = []
+        if session_id is not None and isinstance(stored_state, Mapping):
+            raw_conversation = stored_state.get("conversation", [])
+            if isinstance(raw_conversation, list):
+                for item in raw_conversation[-14:]:
+                    if not isinstance(item, Mapping):
+                        continue
+                    role = str(item.get("role", ""))
+                    if role not in {"user", "assistant"}:
+                        continue
+                    content = str(redact_secrets(str(item.get("content", ""))))[:4_000]
+                    if content:
+                        conversation.append({"role": role, "content": content})
+        conversation.append({"role": "user", "content": safe_goal[:4_000]})
+        state["conversation"] = conversation[-15:]
         # Persist a useful in-flight state before the first provider request.
         # Without this, a long reasoning call appears permanently "created"
         # to `status` even though the agent is actively running.
@@ -396,7 +485,7 @@ class Orchestrator:
         state = checkpoint.get("state", {}) if isinstance(checkpoint.get("state"), Mapping) else {}
         pre = state.get("pre_evidence", []) if isinstance(state, Mapping) else []
         paths = [item.get("path") for item in pre if isinstance(item, Mapping) and isinstance(item.get("path"), str)]
-        current = LocalToolGateway._path_evidence(paths)
+        current = self.gateway._path_evidence(paths)
         process_evidence: list[dict[str, Any]] = []
         for record in self.storage.list_active_processes(session_id=session_id):
             observed = ProcessTools.process_identity(int(record["pid"]))
@@ -435,8 +524,44 @@ class Orchestrator:
 
     async def resume(self, session_id: str, decision: Mapping[str, Any]) -> dict[str, Any]:
         session = self.storage.get_session(session_id)
-        core = await self._ensure_core()
+        checkpoint = self.storage.latest_checkpoint(session_id)
+        checkpoint_phase = (
+            str(checkpoint.get("phase", "")).upper()
+            if isinstance(checkpoint, Mapping)
+            else ""
+        )
         stored_state = session.get("state", {})
+        approval_request = (
+            stored_state.get("approval_request")
+            if isinstance(stored_state, Mapping)
+            else None
+        )
+        checkpoint_state = (
+            checkpoint.get("state", {})
+            if isinstance(checkpoint, Mapping)
+            else {}
+        )
+        checkpoint_request = (
+            checkpoint_state.get("approval_request")
+            if isinstance(checkpoint_state, Mapping)
+            else None
+        )
+        if (
+            str(session.get("status")) != SessionStatus.WAITING_APPROVAL.value
+            or not isinstance(checkpoint, Mapping)
+            or checkpoint_phase in {"PRE_TOOL_CALL", "TOOL_CALL"}
+            or not isinstance(approval_request, Mapping)
+            or not isinstance(checkpoint_request, Mapping)
+            or dict(approval_request) != dict(checkpoint_request)
+        ):
+            result = self.reconcile(session_id)
+            result["status"] = SessionStatus.BLOCKED.value
+            result["blockers"] = [
+                "resume is allowed only for an exact waiting approval; "
+                "crash-interrupted actions require read-only reconciliation"
+            ]
+            return result
+        core = await self._ensure_core()
         stored_budget = (
             stored_state.get("budget", {})
             if isinstance(stored_state, Mapping)
@@ -452,14 +577,20 @@ class Orchestrator:
             "max_cost_usd": self.config.budget.max_cost_usd,
             "max_concurrency": self.config.budget.max_concurrency,
         }
-        if isinstance(stored_budget, Mapping):
-            configured_budget.update(dict(stored_budget))
+        configured_budget = _clamp_persisted_budget(
+            configured_budget,
+            stored_budget if isinstance(stored_budget, Mapping) else {},
+        )
         authority_token = self._bind_subagent_context(
             session_id, configured_budget
         )
         try:
             try:
-                result = await core.resume(session_id, decision)
+                result = await core.resume(
+                    session_id,
+                    decision,
+                    budget=configured_budget,
+                )
             except Exception as exc:
                 # A crash may leave only the LangGraph saver state (the product
                 # checkpoint is written after a normal return).  Surface a safe
@@ -488,7 +619,26 @@ class Orchestrator:
         status = str(result.get("status", SessionStatus.FAILED.value))
         self.storage.update_session(sid, status=status, state=dict(result))
         checkpoint = result.get("checkpoint")
-        if isinstance(checkpoint, Mapping):
+        if status == SessionStatus.WAITING_APPROVAL.value:
+            # A prior completed tool checkpoint may still be attached to the
+            # interrupted state.  Persist the exact current approval state as
+            # the newest product checkpoint so resume can bind both copies.
+            request = result.get("approval_request")
+            self.storage.save_checkpoint(
+                {
+                    "session_id": sid,
+                    "turn_id": result.get("turn_id"),
+                    "phase": "POLICY_CHECK",
+                    "state": dict(result),
+                    "action_id": (
+                        request.get("action_id")
+                        if isinstance(request, Mapping)
+                        else None
+                    ),
+                },
+                session_id=sid,
+            )
+        elif isinstance(checkpoint, Mapping):
             self.storage.save_checkpoint(checkpoint, session_id=sid)
         else:
             # LangGraph returns an interrupt state without traversing the
