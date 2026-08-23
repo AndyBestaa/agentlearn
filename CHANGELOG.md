@@ -6,7 +6,7 @@
 
 ### Added
 
-- 新增 `scripts/live_chat_cycle_smoke.py`：在单个真实 `aster` 对话进程和同一 session 中执行聊天以及两轮 `create → modify → delete`，逐项读取持久化审批并只批准精确目标；宿主在每一步按字节核对文件，结束后复核 turn、审批、工具、副作用、审计链和文件不存在。2026-08-23 的最终 DeepSeek 现场 session `session_d6dfa158b9ae42b188991116b77858bd` 已通过：7 个用户 turn、6 次 consumed 单次审批、6 次完成的副作用工具调用（4 次 `fs.apply_patch`、2 次 `fs.delete`）。
+- 新增 `scripts/live_chat_cycle_smoke.py`：在单个真实 `aster` 对话进程和同一 session 中执行聊天以及两轮 `create → modify → delete`，逐项读取持久化审批并只批准精确目标；宿主在每一步按字节核对文件，结束后复核 turn、审批、工具、副作用、审计链和文件不存在。2026-08-23 在最终提交 `904cc6e` 上复测的 DeepSeek 现场 session `session_49c2fb8db498411880b8680b38bb89da` 已通过：7 个用户 turn、6 次 consumed 单次审批、6 次完成的副作用工具调用（4 次 `fs.apply_patch`、2 次 `fs.delete`）。
 
 - Claude Code 风格的 `aster` 快捷入口：在具体项目目录无参数启动持续对话，显示并最终绑定唯一工作区；支持 `/help`、`/status`、`/new`、`/resume`、对话内精确审批和最近多轮用户/助手上下文。`aster`、`astercode` 和模块入口统一执行严格工作区边界，拒绝宽根/系统树/UNC，项目配置不能扩大 Provider、SSH、网络或状态路径权限。新项目配置名为 `astercode.toml`，旧版 AsterCode `config.toml` 继续兼容，其他应用的通用 `config.toml` 不会被误读。
 - 交互与恢复硬化：流式/状态/审批显示转义终端控制和双向文本字符；恢复预算只能收窄当前上限；PRE_TOOL_CALL/TOOL_CALL 不能直接 resume；reconcile 路径重新授权；固定状态和项目配置拒绝 link、junction 与文件 hardlink。

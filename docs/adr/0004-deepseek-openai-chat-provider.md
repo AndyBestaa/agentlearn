@@ -18,7 +18,7 @@ DeepSeek 官方[首次调用 API](https://api-docs.deepseek.com/zh-cn/)列出 Op
 4. 模型 ID 使用官方 Chat API 当前列出的 `deepseek-v4-flash` 或 `deepseek-v4-pro`。Claude Code 的 `[1m]` 后缀不是此 Provider 的字面模型 ID，配置时明确拒绝。
 5. 请求把运行时系统提示词与 Provider request JSON 分为 system/user message，设置 `response_format={"type":"json_object"}`，要求恰好返回一个满足本地严格 schema 的编排决策。模型仍不直接执行工具；所有 proposal 继续经过 PolicyEngine、审批和 ToolGateway。
 6. 非流式与流式响应都只接受完整、可解析的最终 JSON。流式路径缓冲 `delta.content`，忽略 `reasoning_content`，待完整 JSON、秘密扫描、严格 usage 与唯一 `stop` 终态全部校验后再转发 delta，不记录或向用户暴露隐藏思维链。缺失/矛盾 usage、重复终态、终态后内容、额外 choice、超长或无效 JSON 都 fail-closed。
-7. 没有 key 时继续使用 Fake/replay 完成本地测试；只配置模型或只配置 key 的部分 live 配置必须 fail-closed。2026-08-23 已完成三次真实 `deepseek-v4-flash` 只读 smoke，以及一次同会话的两轮创建、修改、删除受控回归（session `session_d6dfa158b9ae42b188991116b77858bd`，7 个用户 turn、6 次单次审批、6 次副作用工具调用）；成本、Shell、长任务、故障恢复和其他模型仍未验证。
+7. 没有 key 时继续使用 Fake/replay 完成本地测试；只配置模型或只配置 key 的部分 live 配置必须 fail-closed。2026-08-23 已完成三次真实 `deepseek-v4-flash` 只读 smoke，以及可复现的同会话两轮创建、修改、删除受控回归；最终提交 `904cc6e` 上的 session `session_49c2fb8db498411880b8680b38bb89da` 包含 7 个用户 turn、6 次单次审批和 6 次副作用工具调用。成本、Shell、长任务、故障恢复和其他模型仍未验证。
 
 ## 未采用方案
 
