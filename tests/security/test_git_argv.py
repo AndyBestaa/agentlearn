@@ -73,7 +73,10 @@ def test_git_commit_message_is_one_argv_element_not_shell_text(
     hooks_arg = next(value for value in argv if value.startswith("core.hooksPath="))
     hooks_path = Path(hooks_arg.split("=", 1)[1])
     assert hooks_path.is_absolute()
-    assert hooks_path.parent == Path(tempfile.gettempdir()).resolve()
+    # Windows runners may expose the same directory through an 8.3 alias
+    # (RUNNER~1) and its long form (runneradmin). Compare filesystem identity,
+    # not the lexical spelling of an already-existing temp directory.
+    assert os.path.samefile(hooks_path.parent, Path(tempfile.gettempdir()))
     assert captured["kwargs"]["env"]["GIT_ATTR_NOSYSTEM"] == "1"
     assert captured["kwargs"]["env"]["GIT_NO_LAZY_FETCH"] == "1"
     assert "shell" not in captured["kwargs"]

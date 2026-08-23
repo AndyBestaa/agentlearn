@@ -121,7 +121,10 @@ class WindowsJobLimits:
 
 
 def _raise_last_error(operation: str) -> None:
-    code = ctypes.get_last_error()
+    get_last_error = getattr(ctypes, "get_last_error", None)
+    if not callable(get_last_error):
+        raise WindowsJobError("Windows last-error API is unavailable")
+    code = int(get_last_error())
     raise WindowsJobError(f"{operation} failed with Windows error {code}")
 
 

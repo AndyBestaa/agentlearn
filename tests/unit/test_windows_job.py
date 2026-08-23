@@ -22,6 +22,7 @@ from astercode.windows_job import (
 )
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows Job Object tests")
+CREATE_NEW_PROCESS_GROUP = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
 
 
 def _wait_for_file(path: Path, timeout: float = 10.0) -> None:
@@ -70,7 +71,7 @@ def test_job_cpu_time_limit_terminates_busy_process(tmp_path: Path) -> None:
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED,
+        creationflags=CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED,
     )
     try:
         assert job.limit_flags & JOB_OBJECT_LIMIT_JOB_TIME
@@ -100,7 +101,7 @@ def test_job_active_process_limit_blocks_child_creation(tmp_path: Path) -> None:
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED,
+        creationflags=CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED,
     )
     try:
         job.assign_and_resume(proc.pid)
@@ -132,7 +133,7 @@ def test_job_memory_limit_blocks_large_allocation(tmp_path: Path) -> None:
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED,
+        creationflags=CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED,
     )
     try:
         job.assign_and_resume(proc.pid)
@@ -162,7 +163,7 @@ def test_kill_on_close_terminates_process_tree(tmp_path: Path) -> None:
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED,
+        creationflags=CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED,
     )
     try:
         job.assign_and_resume(proc.pid)

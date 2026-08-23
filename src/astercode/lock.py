@@ -96,7 +96,11 @@ class InterProcessFileLock:
         if os.name == "nt":
             import msvcrt
 
-            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            locking = getattr(msvcrt, "locking", None)
+            mode = getattr(msvcrt, "LK_NBLCK", None)
+            if not callable(locking) or not isinstance(mode, int):
+                raise RuntimeError("Windows file-lock API is unavailable")
+            locking(stream.fileno(), mode, 1)
         else:
             import fcntl
 
@@ -110,7 +114,11 @@ class InterProcessFileLock:
         if os.name == "nt":
             import msvcrt
 
-            msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            locking = getattr(msvcrt, "locking", None)
+            mode = getattr(msvcrt, "LK_UNLCK", None)
+            if not callable(locking) or not isinstance(mode, int):
+                raise RuntimeError("Windows file-lock API is unavailable")
+            locking(stream.fileno(), mode, 1)
         else:
             import fcntl
 

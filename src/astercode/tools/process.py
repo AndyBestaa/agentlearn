@@ -286,7 +286,14 @@ class ProcessTools:
                         job_cpu_time_limit_seconds=self.max_cpu_time_seconds,
                     )
                 )
-                creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED
+                new_process_group = vars(subprocess).get(
+                    "CREATE_NEW_PROCESS_GROUP"
+                )
+                if not isinstance(new_process_group, int):
+                    raise UnsandboxedExecutionBlocked(
+                        "Windows process-group support is unavailable"
+                    )
+                creationflags = new_process_group | CREATE_SUSPENDED
             try:
                 proc = subprocess.Popen(
                     argv,
@@ -715,7 +722,10 @@ class ProcessTools:
             open_process.restype = wintypes.HANDLE
             handle = open_process(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
             if not handle:
-                return "missing" if ctypes.get_last_error() == 87 else None
+                get_last_error = getattr(ctypes, "get_last_error", None)
+                if not callable(get_last_error):
+                    return None
+                return "missing" if int(get_last_error()) == 87 else None
             creation = wintypes.FILETIME()
             exit_time = wintypes.FILETIME()
             kernel = wintypes.FILETIME()

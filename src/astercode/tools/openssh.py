@@ -271,7 +271,10 @@ class OpenSSHSession(SSHSession):
             "env": _clean_ssh_environment(),
         }
         if os.name == "nt":
-            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            create_no_window = vars(subprocess).get("CREATE_NO_WINDOW")
+            if not isinstance(create_no_window, int):
+                raise SSHUnavailable("Windows background-process support is unavailable")
+            kwargs["creationflags"] = create_no_window
         else:
             kwargs["start_new_session"] = True
         try:

@@ -45,6 +45,7 @@
 - 修复 `process.send_input`/`process.stop` 审批后错误接收启动专用参数、重复 `process.start` 句柄碰撞、`communicate()` 无界内存、并发启动突破计数预算，以及 Job 分配失败后的稀有清理遗漏。
 - Git executor 拒绝仓库级 `include/includeIf` 配置，强制禁用 hooks、外部 diff、commit/tag GPG signing、credential helper 和 askpass；恶意仓库 signing 配置回归通过。
 - Git P0 查询进一步拒绝 filter/diff/merge 外部驱动、fsmonitor 和外部 attributes/excludes 配置，设置 `GIT_NO_LAZY_FETCH=1` 并对 diff/show 禁用 external diff/textconv；通用 process/shell 也拒绝绕过受控 Git、SSH、network 和 delete 路径。
+- 修复首次公开 CI 暴露的跨平台差异：Linux mypy 通过运行时检查访问 Windows-only API 并保持 fail-closed；Windows 8.3 临时目录别名改用文件身份比较；GitHub Actions 升级到 Node 24 action 版本。
 - 最终全量回归：`294 passed, 5 skipped`；本机 Edge 离线 smoke 另为 `1 passed, 5 deselected`；skip 不视为能力通过。
 
 ### Not verified / still blocked
