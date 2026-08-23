@@ -25,7 +25,7 @@ jobs:
       - name: Verify lockfile is current
         run: uv lock --check
       - name: Sync locked dependencies
-        run: uv sync --extra dev --frozen
+        run: uv sync --extra dev --extra browser --frozen
       - name: Verify installed dependency graph
         run: uv pip check
       - name: Compile Python sources
