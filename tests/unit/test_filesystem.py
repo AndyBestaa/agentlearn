@@ -7,6 +7,44 @@ from astercode.tools import filesystem as filesystem_module
 from astercode.tools.filesystem import FilesystemTools
 
 
+def test_apply_patch_contract_names_the_required_envelope() -> None:
+    spec = next(item for item in FilesystemTools.specs if item.name == "fs.apply_patch")
+    patch_schema = spec.schema["properties"]["patch"]
+
+    assert "AsterCode patch" in spec.description
+    assert "*** Begin Patch" in patch_schema["description"]
+    assert "---/+++" in patch_schema["description"]
+
+
+def test_apply_patch_creates_a_new_file(tmp_path: Path) -> None:
+    target = tmp_path / "hello.py"
+
+    result = FilesystemTools([tmp_path]).apply_patch(
+        """*** Begin Patch
+*** Add File: hello.py
++print(\"hello world\")
+*** End Patch"""
+    )
+
+    assert result.status == "completed"
+    assert target.read_text(encoding="utf-8") == 'print("hello world")\n'
+
+
+def test_apply_patch_rejects_standard_unified_diff_with_format_help(
+    tmp_path: Path,
+) -> None:
+    result = FilesystemTools([tmp_path]).apply_patch(
+        """--- /dev/null
++++ b/hello.py
+@@ -0,0 +1 @@
++print(\"hello world\")"""
+    )
+
+    assert result.status == "failed"
+    assert "*** Begin Patch" in str(result.error)
+    assert not (tmp_path / "hello.py").exists()
+
+
 def test_apply_patch_uses_sibling_atomic_replace(
     tmp_path: Path, monkeypatch
 ) -> None:

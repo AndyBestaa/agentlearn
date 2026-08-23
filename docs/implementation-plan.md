@@ -84,7 +84,7 @@
 
 ## 每次阶段验收命令
 
-本轮最终全量回归为 `324 passed, 10 skipped`；另有历史本机 Edge 离线 smoke `1 passed, 5 deselected`。10 个 skip 保持为未满足的平台/权限或 live 条件，不计入已完成能力。
+本轮最终全量回归为 `328 passed, 10 skipped`；另有历史本机 Edge 离线 smoke `1 passed, 5 deselected`。10 个 skip 保持为未满足的平台/权限或 live 条件，不计入已完成能力。
 
 ```powershell
 uv run astercode doctor --root .

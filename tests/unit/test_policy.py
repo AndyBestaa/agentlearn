@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import timedelta
 from pathlib import Path
 
+import pytest
+
 from astercode.config import AppConfig, ExecutionMode
 from astercode.models import ApprovalDecision, ApprovalStatus, RiskLevel, utc_now
 from astercode.policy import PolicyEngine
@@ -55,14 +57,45 @@ def test_policy_allows_read_but_binds_write_approval_hash(
     engine = PolicyEngine(app_config)
 
     read = engine.evaluate("fs.read", {"path": str(file)}, cwd=str(tmp_path))
-    first = engine.evaluate("fs.apply_patch", {"patch": "first"}, cwd=str(tmp_path))
-    second = engine.evaluate("fs.apply_patch", {"patch": "second"}, cwd=str(tmp_path))
+    first = engine.evaluate(
+        "fs.apply_patch",
+        {"patch": "*** Begin Patch\n*** Add File: first.txt\n+first\n*** End Patch"},
+        cwd=str(tmp_path),
+    )
+    second = engine.evaluate(
+        "fs.apply_patch",
+        {"patch": "*** Begin Patch\n*** Add File: second.txt\n+second\n*** End Patch"},
+        cwd=str(tmp_path),
+    )
 
     assert read.decision == "allow"
     assert read.risk is RiskLevel.P0
     assert first.decision == "approval_required"
     assert first.approval is not None
+    assert first.normalized_action["real_paths"] == [str(tmp_path / "first.txt")]
     assert first.action_hash != second.action_hash
+
+
+def test_policy_rejects_unbound_patch_format_before_approval(
+    app_config: AppConfig, tmp_path: Path
+) -> None:
+    engine = PolicyEngine(app_config)
+
+    with pytest.raises(ValueError, match=r"\*\*\* Begin Patch"):
+        engine.evaluate(
+            "fs.apply_patch",
+            {
+                "patch": (
+                    "--- /dev/null\n"
+                    "+++ b/hello.py\n"
+                    "@@ -0,0 +1 @@\n"
+                    '+print("hello world")'
+                )
+            },
+            cwd=str(tmp_path),
+        )
+
+    assert not (tmp_path / "hello.py").exists()
 
 
 def test_policy_denies_ssh_when_allowlist_is_empty(app_config: AppConfig) -> None:

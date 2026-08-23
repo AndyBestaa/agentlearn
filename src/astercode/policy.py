@@ -22,6 +22,7 @@ from .security import (
     secure_equal,
     sha256_hex,
 )
+from .tools.filesystem import parse_patch
 
 _DEDICATED_OR_NETWORK_EXECUTABLES = frozenset(
     {
@@ -349,22 +350,24 @@ class PolicyEngine:
             # patch text is model-controlled data, so malformed/escaping
             # targets fail closed here rather than being trusted by the
             # executor later.
+            changes = parse_patch(str(arguments["patch"]))
+            if not changes:
+                raise ValueError(
+                    "unsupported patch format; use *** Begin Patch with "
+                    "*** Add File or *** Update File sections, not ---/+++ headers"
+                )
             patch_paths: list[str] = []
-            for line in str(arguments["patch"]).splitlines():
-                match = re.match(r"^\*\*\*\s+(?:Update|Add|Delete) File:\s*(.+?)\s*$", line)
-                if match is None:
-                    continue
+            for path_text, _old, _new in changes:
                 checked = canonicalize_authorized_path(
-                    match.group(1),
+                    path_text,
                     self.config.security.authorized_roots,
                     cwd=cwd,
                     must_exist=False,
                     reject_unc=self.config.security.reject_unc_paths,
                 )
                 patch_paths.append(str(checked.resolved))
-            if patch_paths:
-                data["patch_paths"] = patch_paths
-                paths.extend(patch_paths)
+            data["patch_paths"] = patch_paths
+            paths.extend(patch_paths)
         if paths: data["real_paths"] = paths
         if tool.startswith("ssh."):
             ssh_target = self._ssh_target_binding(arguments)

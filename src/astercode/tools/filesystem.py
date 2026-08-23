@@ -25,7 +25,34 @@ class FilesystemTools:
         ToolSpec("fs.stat", "Read metadata for an authorized path.", "filesystem.read", max_output=8_000, schema={"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}),
         ToolSpec("fs.read", "Read bounded UTF-8 text from an authorized file.", "filesystem.read", max_output=32_000, schema={"type": "object", "properties": {"path": {"type": "string"}, "start_line": {"type": "integer", "minimum": 1}, "end_line": {"type": ["integer", "null"], "minimum": 1}}, "required": ["path", "start_line", "end_line"], "additionalProperties": False}),
         ToolSpec("fs.search", "Search authorized files with ripgrep when available.", "filesystem.read", max_output=32_000, schema={"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}, "max_results": {"type": "integer", "minimum": 1, "maximum": 1000}}, "required": ["pattern", "path", "max_results"], "additionalProperties": False}),
-        ToolSpec("fs.apply_patch", "Apply an exact unified patch inside the workspace.", "filesystem.write", ("file_write",), "P1", idempotent=False, schema={"type": "object", "properties": {"patch": {"type": "string"}}, "required": ["patch"], "additionalProperties": False}),
+        ToolSpec(
+            "fs.apply_patch",
+            "Apply an exact AsterCode patch inside the workspace; standard ---/+++ unified diffs are invalid.",
+            "filesystem.write",
+            ("file_write",),
+            "P1",
+            idempotent=False,
+            schema={
+                "type": "object",
+                "properties": {
+                    "patch": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 262_144,
+                        "description": (
+                            "Use exactly: *** Begin Patch, then *** Add File: path or "
+                            "*** Update File: path with +/- lines, then *** End Patch. "
+                            "Never use ---/+++ headers; use fs.delete for deletion."
+                        ),
+                        "examples": [
+                            "*** Begin Patch\n*** Add File: hello.py\n+print(\"hello\")\n*** End Patch"
+                        ],
+                    }
+                },
+                "required": ["patch"],
+                "additionalProperties": False,
+            },
+        ),
         ToolSpec("fs.mkdir", "Create an authorized directory.", "filesystem.write", ("directory_create",), "P1", idempotent=True, schema={"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}),
         ToolSpec("fs.move", "Move an authorized path within the workspace.", "filesystem.write", ("path_move",), "P1", idempotent=False, schema={"type": "object", "properties": {"source": {"type": "string"}, "destination": {"type": "string"}}, "required": ["source", "destination"], "additionalProperties": False}),
         ToolSpec("fs.delete", "Delete an authorized path; approval is required by the gateway.", "filesystem.delete", ("path_delete",), "P3", idempotent=False, schema={"type": "object", "properties": {"path": {"type": "string"}, "recursive": {"type": "boolean"}}, "required": ["path", "recursive"], "additionalProperties": False}),
@@ -195,9 +222,12 @@ class FilesystemTools:
         try:
             if not patch.strip():
                 raise ValueError("empty patch")
-            changes = _parse_patch(patch)
+            changes = parse_patch(patch)
             if not changes:
-                raise ValueError("no supported patch sections found")
+                raise ValueError(
+                    "unsupported patch format; use *** Begin Patch with "
+                    "*** Add File or *** Update File sections, not ---/+++ headers"
+                )
             # Preflight every section first.  A later context mismatch must
             # not leave earlier sections partially applied.
             for path_text, old, new in changes:
@@ -365,7 +395,7 @@ def _atomic_text_write(path: Path, text: str, previous: str, *, encoding: str = 
             os.unlink(temp_name)
 
 
-def _parse_patch(patch: str) -> list[tuple[str, str | None, str]]:
+def parse_patch(patch: str) -> list[tuple[str, str | None, str]]:
     """Parse a deliberately small exact-replacement patch format.
 
     Supported sections are the familiar OpenAI-style `*** Update File:` with
