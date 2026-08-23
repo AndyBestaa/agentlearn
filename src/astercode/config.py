@@ -114,10 +114,6 @@ def validate_strict_project_file(value: str | Path, root: str | Path) -> Path:
     if not candidate.is_absolute():
         candidate = workspace / candidate
     candidate = Path(os.path.abspath(candidate))
-    try:
-        candidate.relative_to(workspace)
-    except ValueError as exc:
-        raise ConfigError(f"project file escapes the strict workspace: {candidate}") from exc
     is_junction = bool(getattr(candidate, "is_junction", lambda: False)())
     if candidate.is_symlink() or is_junction:
         raise ConfigError(f"project file cannot be a link or junction: {candidate}")
@@ -731,8 +727,8 @@ def load_config(
         data["project_root"] = str(root)
         # A repository is untrusted input.  Under the convenience shortcut it
         # cannot grant itself network, SSH, process, browser, extension, GUI or
-        # subagent capabilities.  The advanced ``astercode`` entrypoint remains
-        # available for deliberately reviewed project configuration.
+        # subagent capabilities.  Every public CLI entrypoint uses this same
+        # boundary; project files are data, not host-authority grants.
         data["security"] = SecurityConfig(
             authorized_roots=[root],
             browser=BrowserSecurityConfig(

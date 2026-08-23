@@ -47,12 +47,17 @@ def _run_offline_with_windows_retry(
 
     transient_markers = (
         "access is denied",
+        "access denied",
+        "being used by another process",
+        "os error 5",
         "sharing violation",
+        "the process cannot access the file",
         "os error -2147024891",
         "os error -2147024864",
         "拒绝访问",
     )
-    for attempt in range(2):
+    attempts = 5 if os.name == "nt" else 1
+    for attempt in range(attempts):
         print("+", subprocess.list2cmdline(argv), flush=True)
         completed = subprocess.run(
             argv,
@@ -73,9 +78,13 @@ def _run_offline_with_windows_retry(
         transient = os.name == "nt" and any(
             marker in combined for marker in transient_markers
         )
-        if attempt == 0 and transient:
-            print("transient Windows cache/file lock; retrying offline operation once", flush=True)
-            time.sleep(0.5)
+        if attempt + 1 < attempts and transient:
+            delay = 0.5 * (2**attempt)
+            print(
+                f"transient Windows cache/file lock; retrying offline operation in {delay:.1f}s",
+                flush=True,
+            )
+            time.sleep(delay)
             continue
         raise subprocess.CalledProcessError(
             completed.returncode,
