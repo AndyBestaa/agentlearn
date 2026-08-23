@@ -5,9 +5,11 @@ from __future__ import annotations
 import sys
 
 from . import cli
+from .terminal import configure_utf8_output
 
 
 def _invoke(*, default_chat: bool) -> None:
+    configure_utf8_output()
     if default_chat and len(sys.argv) == 1:
         sys.argv.append("chat")
     previous = cli._STRICT_SHORTCUT

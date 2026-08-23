@@ -1209,5 +1209,8 @@ def _minimal_config(root: Path) -> str:
 if __name__ == "__main__":
     # ``python -m astercode.cli`` is a public CLI path too; do not leave it as
     # an escape hatch around the strict workspace boundary.
+    from .terminal import configure_utf8_output
+
+    configure_utf8_output()
     _STRICT_SHORTCUT = True
     app()

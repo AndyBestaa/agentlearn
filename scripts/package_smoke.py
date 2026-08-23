@@ -317,7 +317,14 @@ def main() -> int:
             env=clean_env,
         )
         (project / ".astercode").mkdir()
-        _run([str(aster)], env=clean_env, cwd=project, input_text="/exit\n")
+        legacy_console_env = dict(clean_env)
+        legacy_console_env["PYTHONIOENCODING"] = "cp1252"
+        _run(
+            [str(aster)],
+            env=legacy_console_env,
+            cwd=project,
+            input_text="/exit\n",
+        )
         _verify_packaged_prompt(
             python,
             root / "prompts" / "coding_agent.md",

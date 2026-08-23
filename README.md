@@ -262,7 +262,7 @@ uv pip check --python .venv\Scripts\python.exe
 
 测试不需要 API key、真实网络或 SSH；使用 deterministic Fake Provider、Fake SSH、Fake Browser、Fake MCP/Plugin、Fake 子代理、临时 Git 仓库和 replay fixture。Windows Job Object 已通过本机父子进程树终止、`process.stop` 和分配失败不执行目标代码测试；这只证明进程树约束，不证明文件/网络隔离。2026-08-23 的 DeepSeek 只读 smoke 已通过，但不替代自动化测试，也没有证明成本、长任务、写操作或真实工具权限安全。Playwright + 本机 Edge 的 `about:blank` 离线 smoke 已通过，但外网导航未运行。Linux 实机 bash、PowerShell 7、真实 OpenAI、真实 SSH、浏览器网络、GUI、MCP/plugin live runner 和 OS 沙箱仍需独立验证。
 
-本轮最终全量回归结果为 `323 passed, 10 skipped`；另有历史本机 Edge 离线 smoke `1 passed, 5 deselected`。skip 仍代表缺少相应平台/权限或 live 条件，不应解释成已通过。
+本轮最终全量回归结果为 `324 passed, 10 skipped`；另有历史本机 Edge 离线 smoke `1 passed, 5 deselected`。skip 仍代表缺少相应平台/权限或 live 条件，不应解释成已通过。
 
 ## 常见问题
 

@@ -43,13 +43,14 @@
 
 ### Fixed
 
+- 修复 Windows 英文系统的旧终端代码页（例如 `cp1252`）无法输出中文欢迎语而崩溃的问题；所有公开 CLI 入口现在都会先规范化为 UTF-8，打包 smoke 会显式模拟 `cp1252` 回归。
 - 普通自然语言不再可能越过待审批 interrupt：已有 `waiting_approval` 的 session 必须提交绑定 approval id/action hash/nonce 的宿主终端决策；批准文本不进入模型上下文。快捷对话也拒绝静默授权用户主目录或磁盘根目录，并将状态、artifact 和浏览器下载位置强制限制在启动工作区。
 - 修复 `deny_by_default` 下 `allow_unsandboxed` 审批可能绕过未验证网络边界的问题。普通 process/shell 现在同时要求运行时证明进程沙箱和网络策略均已强制执行；审批不能替代任一 OS 边界。正常生产 CLI 不注入 verified boundary，只有 deterministic 测试或未来完成 attestation 的 host adapter 才能显式注入。
 - 修复 `process.send_input`/`process.stop` 审批后错误接收启动专用参数、重复 `process.start` 句柄碰撞、`communicate()` 无界内存、并发启动突破计数预算，以及 Job 分配失败后的稀有清理遗漏。
 - Git executor 拒绝仓库级 `include/includeIf` 配置，强制禁用 hooks、外部 diff、commit/tag GPG signing、credential helper 和 askpass；恶意仓库 signing 配置回归通过。
 - Git P0 查询进一步拒绝 filter/diff/merge 外部驱动、fsmonitor 和外部 attributes/excludes 配置，设置 `GIT_NO_LAZY_FETCH=1` 并对 diff/show 禁用 external diff/textconv；通用 process/shell 也拒绝绕过受控 Git、SSH、network 和 delete 路径。
 - 修复首次公开 CI 暴露的跨平台差异：Linux mypy 通过运行时检查访问 Windows-only API 并保持 fail-closed；Windows 8.3 临时目录别名改用文件身份比较；GitHub Actions 升级到 Node 24 action 版本。
-- 最终全量回归：`323 passed, 10 skipped`；历史本机 Edge 离线 smoke 另为 `1 passed, 5 deselected`；skip 不视为能力通过。
+- 最终全量回归：`324 passed, 10 skipped`；历史本机 Edge 离线 smoke 另为 `1 passed, 5 deselected`；skip 不视为能力通过。
 
 ### Not verified / still blocked
 
