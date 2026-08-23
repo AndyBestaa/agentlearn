@@ -4,6 +4,41 @@ from typing import cast
 
 from astercode.models import utc_now
 from astercode.orchestrator import AgentState, AsterCodeOrchestrator
+from astercode.provider import ToolProposal
+
+
+def test_tool_proposal_host_is_derived_from_the_tool_namespace() -> None:
+    orchestrator = object.__new__(AsterCodeOrchestrator)
+    state = cast(
+        AgentState,
+        {"session_id": "session", "turn_id": "turn", "usage": {}},
+    )
+
+    local = orchestrator._proposal_to_call(
+        state,
+        ToolProposal(
+            tool="fs.apply_patch",
+            arguments={"patch": "payload"},
+            host="workspace",
+            cwd=None,
+            purpose="write one workspace file",
+        ),
+        0,
+    )
+    remote = orchestrator._proposal_to_call(
+        state,
+        ToolProposal(
+            tool="ssh.stat",
+            arguments={"host_id": "allowed-host", "path": "/srv/app"},
+            host="model-supplied-host",
+            cwd=None,
+            purpose="inspect an explicitly configured remote host",
+        ),
+        1,
+    )
+
+    assert local.host == "local"
+    assert remote.host == "allowed-host"
 
 
 def test_checkpoint_compaction_preserves_required_state_and_recent_evidence() -> None:

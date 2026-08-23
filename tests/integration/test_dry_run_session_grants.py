@@ -13,7 +13,7 @@ from astercode.runtime import Orchestrator, build_registry
 
 
 @pytest.mark.asyncio
-async def test_exact_p1_session_grant_reuses_only_unchanged_action(
+async def test_exact_p1_session_grant_cannot_reuse_a_changed_path_state(
     app_config, storage, tmp_path: Path
 ) -> None:
     session_id = "session-grant-test"
@@ -46,15 +46,11 @@ async def test_exact_p1_session_grant_reuses_only_unchanged_action(
 
     repeated = ToolCall(tool="fs.mkdir", arguments={"path": "same"}, cwd=str(tmp_path))
     reused = await gateway.authorize(repeated, context)
-    assert reused.outcome == "allow"
-    assert "session grant" in reused.reason
-    assert (await gateway.execute(repeated, context)).status.value == "completed"
+    assert reused.outcome == "deny"
+    assert "policy validation failed" in reused.reason
 
     grant = storage.list_session_grants(session_id)[0]
     storage.revoke_session_grant(grant["grant_id"])
-    after_revoke = ToolCall(tool="fs.mkdir", arguments={"path": "same"}, cwd=str(tmp_path))
-    revoked_auth = await gateway.authorize(after_revoke, context)
-    assert revoked_auth.outcome == "require_approval"
 
     changed = ToolCall(tool="fs.mkdir", arguments={"path": "different"}, cwd=str(tmp_path))
     changed_auth = await gateway.authorize(changed, context)

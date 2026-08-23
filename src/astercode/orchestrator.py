@@ -10,7 +10,7 @@ import math
 import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, Callable, Literal, Protocol, TypedDict, runtime_checkable
+from typing import Any, Callable, Literal, Protocol, TypedDict, cast, runtime_checkable
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -39,9 +39,11 @@ from .provider import (
     ProviderRequest,
     ProviderResponse,
     ProviderStreamEvent,
+    ProviderUsage,
     ToolProposal,
 )
 from .security import contains_probable_secret, contains_prompt_injection, redact_secrets
+from .tools.filesystem import parse_patch
 
 _TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
@@ -150,6 +152,8 @@ class AgentState(TypedDict, total=False):
     pending_calls: list[dict[str, Any]]
     current_call: dict[str, Any] | None
     current_purpose: str | None
+    current_action_key: str | None
+    completed_action_keys: list[str]
     policy_outcome: str | None
     policy_reason: str | None
     approval_request: dict[str, Any] | None
@@ -184,6 +188,7 @@ class AsterCodeOrchestrator:
         max_model_result_chars: int = 8_192,
         max_model_context_chars: int = 24_576,
         max_tool_retries: int = 2,
+        max_provider_retries: int = 1,
         memory_lookup: Callable[[str], Sequence[Mapping[str, Any]]] | None = None,
         event_sink: Callable[[Mapping[str, Any]], Any] | None = None,
     ) -> None:
@@ -193,6 +198,8 @@ class AsterCodeOrchestrator:
             raise ValueError("max_model_context_chars must be at least max_model_result_chars")
         if not 0 <= max_tool_retries <= 8:
             raise ValueError("max_tool_retries must be between 0 and 8")
+        if not 0 <= max_provider_retries <= 1:
+            raise ValueError("max_provider_retries must be 0 or 1")
         self.provider = provider
         self.gateway = gateway
         self.tools = tuple(tools)
@@ -200,6 +207,7 @@ class AsterCodeOrchestrator:
         self.max_model_result_chars = max_model_result_chars
         self.max_model_context_chars = max_model_context_chars
         self.max_tool_retries = max_tool_retries
+        self.max_provider_retries = max_provider_retries
         self.memory_lookup = memory_lookup
         self.event_sink = event_sink
         self._cancel_events: dict[str, asyncio.Event] = {}
@@ -272,6 +280,8 @@ class AsterCodeOrchestrator:
             pending_calls=[],
             current_call=None,
             current_purpose=None,
+            current_action_key=None,
+            completed_action_keys=[],
             policy_outcome=None,
             policy_reason=None,
             approval_request=None,
@@ -480,30 +490,76 @@ class AsterCodeOrchestrator:
         events: list[dict[str, Any]] = []
         # The outer timeout is the host's final boundary.  It also constrains
         # fake/custom providers which do not implement an adapter timeout.
-        async with asyncio.timeout(request.timeout_seconds):
-            async for raw_event in self.provider.stream(request):
-                event = raw_event if isinstance(raw_event, ProviderStreamEvent) else ProviderStreamEvent.model_validate(raw_event)
-                item = {
-                    "type": event.type,
-                    "at": utc_now().isoformat(),
-                    "response_id": event.response.response_id if event.response is not None else None,
-                    "delta_chars": len(event.delta) if event.delta is not None else None,
-                }
-                events.append(item)
-                emitted = {"event": f"provider.{event.type}", "session_id": request.session_id, **item}
-                if event.delta is not None:
-                    emitted["delta"] = event.delta
-                await self._emit(emitted)
-                if event.type == "completed" and event.response is not None:
+        try:
+            async with asyncio.timeout(request.timeout_seconds):
+                async for raw_event in self.provider.stream(request):
+                    try:
+                        event = (
+                            raw_event
+                            if isinstance(raw_event, ProviderStreamEvent)
+                            else ProviderStreamEvent.model_validate(raw_event)
+                        )
+                    except (TypeError, ValidationError) as exc:
+                        raise ProviderExecutionError(
+                            "provider stream returned a malformed event",
+                            code="malformed_event",
+                        ) from exc
                     if response is not None:
-                        raise ProviderExecutionError("provider stream returned more than one terminal response")
-                    response = event.response
+                        raise ProviderExecutionError(
+                            "provider stream returned content after its terminal response",
+                            code="malformed_event",
+                            usage=response.usage,
+                        )
+                    item = {
+                        "type": event.type,
+                        "at": utc_now().isoformat(),
+                        "response_id": event.response.response_id if event.response is not None else None,
+                        "delta_chars": len(event.delta) if event.delta is not None else None,
+                    }
+                    events.append(item)
+                    emitted = {
+                        "event": f"provider.{event.type}",
+                        "session_id": request.session_id,
+                        **item,
+                    }
+                    if event.delta is not None:
+                        emitted["delta"] = event.delta
+                    await self._emit(emitted)
+                    if event.type == "completed" and event.response is not None:
+                        response = event.response
+        except ProviderExecutionError as exc:
+            if not exc.events:
+                exc.events = tuple(events)
+            raise
+        except (TimeoutError, ProviderConfigurationError):
+            raise
+        except Exception as exc:
+            raise ProviderExecutionError(
+                f"provider stream failed ({type(exc).__name__})",
+                code="malformed_event",
+                events=events,
+            ) from None
         if response is None:
-            raise ProviderExecutionError("provider stream ended without a terminal response")
+            raise ProviderExecutionError(
+                "provider stream ended without a terminal response",
+                code="incomplete_stream",
+                retryable=True,
+                events=events,
+            )
         if request.max_output_tokens is not None and response.usage.output_tokens > request.max_output_tokens:
-            raise ProviderExecutionError("provider reported output usage above the host request limit")
+            raise ProviderExecutionError(
+                "provider reported output usage above the host request limit",
+                code="budget_violation",
+                usage=response.usage,
+                events=events,
+            )
         if request.max_total_tokens is not None and response.usage.total_tokens > request.max_total_tokens:
-            raise ProviderExecutionError("provider reported total usage above the remaining run budget")
+            raise ProviderExecutionError(
+                "provider reported total usage above the remaining run budget",
+                code="budget_violation",
+                usage=response.usage,
+                events=events,
+            )
         return response, events
 
     async def _observe(self, state: AgentState) -> dict[str, Any]:
@@ -526,16 +582,45 @@ class AsterCodeOrchestrator:
             return update
 
         queued = list(state.get("pending_calls", []))
-        if queued:
+        suppressed_queued: list[str] = []
+        completed_action_keys = set(state.get("completed_action_keys", []))
+        while queued:
             first_raw, *rest = queued
             first = dict(first_raw)
+            purpose = first.pop("_purpose", "execute proposed tool")
+            semantic_key = first.pop("_semantic_key", None)
+            tool = first.get("tool")
+            if (
+                isinstance(tool, str)
+                and semantic_key in completed_action_keys
+                and self._tool_has_side_effects(tool)
+            ):
+                suppressed_queued.append(tool)
+                queued = rest
+                continue
             update.update(
                 current_call=first,
-                current_purpose=first.pop("_purpose", "execute proposed tool"),
+                current_purpose=purpose,
+                current_action_key=semantic_key,
                 pending_calls=rest,
                 next_action="policy-check queued tool proposal",
             )
+            if suppressed_queued:
+                update["messages"] = [
+                    *state.get("messages", []),
+                    "host suppressed an already-verified duplicate side-effect proposal: "
+                    + ", ".join(suppressed_queued),
+                ]
             return update
+        if suppressed_queued:
+            update.update(
+                pending_calls=[],
+                messages=[
+                    *state.get("messages", []),
+                    "host suppressed an already-verified duplicate side-effect proposal: "
+                    + ", ".join(suppressed_queued),
+                ],
+            )
 
         stopped = self._stop_update(state)
         if stopped:
@@ -579,44 +664,235 @@ class AsterCodeOrchestrator:
             max_output_tokens=output_cap,
             max_total_tokens=total_remaining,
         )
+        provider_retries = 0
+        retry_attempts = dict(state.get("retry_attempts", {}))
+        attempt_state = state
+        failed_stream_events: list[dict[str, Any]] = []
+        decision_digest = hashlib.sha256(
+            f"{state['session_id']}\0{state['turn_id']}\0{RunUsage.model_validate(state.get('usage', {})).rounds}".encode()
+        ).hexdigest()[:24]
+        decision_id = f"decision_{decision_digest}"
         try:
-            response, stream_events = await self._stream_provider(request)
+            while True:
+                try:
+                    response, stream_events = await self._stream_provider(request)
+                    break
+                except ProviderExecutionError as exc:
+                    failed_stream_events.extend(dict(item) for item in exc.events)
+                    if exc.usage is not None:
+                        observed = self._add_provider_usage_value(attempt_state, exc.usage)
+                        attempt_state = cast(
+                            AgentState,
+                            {
+                                **attempt_state,
+                                "usage": observed.model_dump(mode="json"),
+                            },
+                        )
+                        update["usage"] = observed.model_dump(mode="json")
+                    retryable_provider_output = (
+                        exc.retryable
+                        and exc.code in {"incomplete_stream", "invalid_structure"}
+                        and exc.usage is not None
+                    )
+                    if (
+                        retryable_provider_output
+                        and provider_retries < self.max_provider_retries
+                    ):
+                        stopped = self._stop_update(attempt_state)
+                        if stopped is not None:
+                            stopped["blockers"] = [
+                                *stopped.get("blockers", []),
+                                str(redact_secrets(str(exc))),
+                            ]
+                            update.update(stopped)
+                            update.update(
+                                retry_attempts=retry_attempts,
+                                provider_events=[
+                                    *state.get("provider_events", []),
+                                    *failed_stream_events,
+                                ][-128:],
+                            )
+                            return update
+                        remaining_retry_time = self._remaining_elapsed_seconds(
+                            attempt_state
+                        )
+                        if remaining_retry_time <= 0:
+                            raise TimeoutError from exc
+                        retry_output_cap, retry_total_remaining = (
+                            self._remaining_provider_tokens(attempt_state)
+                        )
+                        if retry_output_cap is not None and retry_output_cap <= 0:
+                            update.update(
+                                status=SessionStatus.BLOCKED.value,
+                                blockers=[
+                                    *state.get("blockers", []),
+                                    "token budget exhausted after failed provider decision",
+                                    str(redact_secrets(str(exc))),
+                                ],
+                                retry_attempts=retry_attempts,
+                                provider_events=[
+                                    *state.get("provider_events", []),
+                                    *failed_stream_events,
+                                ][-128:],
+                                next_action="increase the exact run budget or narrow the task",
+                            )
+                            return update
+                        provider_retries += 1
+                        retry_attempts["provider"] = provider_retries
+                        request = request.model_copy(
+                            update={
+                                "timeout_seconds": remaining_retry_time,
+                                "max_output_tokens": retry_output_cap,
+                                "max_total_tokens": retry_total_remaining,
+                            }
+                        )
+                        await self._emit(
+                            {
+                                "event": "provider.retry",
+                                "session_id": state["session_id"],
+                                "turn_id": state["turn_id"],
+                                "decision_id": decision_id,
+                                "attempt": provider_retries,
+                                "reason": exc.code,
+                            }
+                        )
+                        continue
+                    blockers = [
+                        *state.get("blockers", []),
+                        str(redact_secrets(str(exc))),
+                    ]
+                    if exc.retryable and exc.usage is None:
+                        blockers.append(
+                            "provider retry disabled because trustworthy token usage is unavailable"
+                        )
+                    update.update(
+                        status=SessionStatus.FAILED.value,
+                        blockers=blockers,
+                        retry_attempts=retry_attempts,
+                        provider_events=[
+                            *state.get("provider_events", []),
+                            *failed_stream_events,
+                        ][-128:],
+                        next_action="inspect the provider failure",
+                    )
+                    return update
         except TimeoutError:
-            prior_work = bool(state.get("completed") or state.get("tool_results"))
+            prior_work = bool(
+                attempt_state.get("completed") or attempt_state.get("tool_results")
+            )
             update.update(
                 status=(SessionStatus.PARTIAL.value if prior_work else SessionStatus.BLOCKED.value),
                 blockers=[
                     *state.get("blockers", []),
                     "provider call exhausted the remaining elapsed-time budget",
                 ],
+                usage=RunUsage.model_validate(attempt_state.get("usage", {})).model_dump(
+                    mode="json"
+                ),
+                retry_attempts=retry_attempts,
+                provider_events=[
+                    *state.get("provider_events", []),
+                    *failed_stream_events,
+                ][-128:],
                 next_action="increase the exact run budget or narrow the task",
             )
             return update
         except ProviderConfigurationError as exc:
             update.update(
                 status=SessionStatus.BLOCKED.value,
-                blockers=[*state.get("blockers", []), str(exc)],
+                blockers=[
+                    *state.get("blockers", []),
+                    str(redact_secrets(str(exc))),
+                ],
+                usage=RunUsage.model_validate(attempt_state.get("usage", {})).model_dump(
+                    mode="json"
+                ),
+                retry_attempts=retry_attempts,
+                provider_events=[
+                    *state.get("provider_events", []),
+                    *failed_stream_events,
+                ][-128:],
                 next_action="configure the selected provider",
             )
             return update
-        except ProviderExecutionError as exc:
+
+        usage = self._add_provider_usage(attempt_state, response)
+        merged_provider_events = [
+            *state.get("provider_events", []),
+            *failed_stream_events,
+            *stream_events,
+        ][-128:]
+        update.update(
+            usage=usage.model_dump(mode="json"),
+            retry_attempts=retry_attempts,
+            provider_events=merged_provider_events,
+        )
+        budget = RunBudget.model_validate(state.get("budget", {}))
+        provider_budget_reason: str | None = None
+        if (
+            budget.max_input_tokens is not None
+            and usage.input_tokens >= budget.max_input_tokens
+        ):
+            provider_budget_reason = "provider input-token budget exhausted"
+        elif budget.max_tokens is not None and usage.total_tokens >= budget.max_tokens:
+            provider_budget_reason = "provider total-token budget exhausted"
+        elif (
+            budget.max_output_tokens is not None
+            and usage.output_tokens >= budget.max_output_tokens
+        ):
+            provider_budget_reason = "provider output-token budget exhausted"
+        elif budget.max_cost_usd is not None and usage.cost_usd is None:
+            provider_budget_reason = "provider cost is unknown"
+        elif (
+            budget.max_cost_usd is not None
+            and usage.cost_usd is not None
+            and usage.cost_usd >= budget.max_cost_usd
+        ):
+            provider_budget_reason = "provider cost budget exhausted"
+        if provider_budget_reason is not None:
+            prior_work = bool(state.get("completed") or state.get("tool_results"))
             update.update(
-                status=SessionStatus.FAILED.value,
-                blockers=[*state.get("blockers", []), str(exc)],
-                next_action="inspect the provider failure",
+                status=(
+                    SessionStatus.PARTIAL.value
+                    if prior_work
+                    else SessionStatus.BLOCKED.value
+                ),
+                blockers=[*state.get("blockers", []), provider_budget_reason],
+                next_action="increase the exact run budget or narrow the task",
             )
             return update
-
-        usage = self._add_provider_usage(state, response)
+        suppressed_duplicates: list[str] = []
         try:
-            calls = [
-                self._proposal_to_call(state, proposal, index).model_dump(mode="json") | {"_purpose": str(redact_secrets(proposal.purpose))}
-                for index, proposal in enumerate(response.decision.tool_calls)
-            ]
+            calls: list[dict[str, Any]] = []
+            completed_action_keys = set(state.get("completed_action_keys", []))
+            seen_side_effect_keys = set(completed_action_keys)
+            for index, proposal in enumerate(response.decision.tool_calls):
+                call = self._proposal_to_call(attempt_state, proposal, index)
+                semantic_key = self._semantic_action_key(call)
+                if self._tool_has_side_effects(call.tool):
+                    if semantic_key in seen_side_effect_keys:
+                        suppressed_duplicates.append(call.tool)
+                        continue
+                    # Two equal side effects in one provider decision are one
+                    # proposal, not an implicit retry. Only the first may cross
+                    # policy/approval; later copies are suppressed host-side.
+                    seen_side_effect_keys.add(semantic_key)
+                calls.append(
+                    call.model_dump(mode="json")
+                    | {
+                        "_purpose": str(redact_secrets(proposal.purpose)),
+                        "_semantic_key": semantic_key,
+                    }
+                )
         except ProviderExecutionError as exc:
             update.update(
                 status=SessionStatus.FAILED.value,
-                blockers=[*state.get("blockers", []), str(exc)],
+                blockers=[
+                    *state.get("blockers", []),
+                    str(redact_secrets(str(exc))),
+                ],
+                retry_attempts=retry_attempts,
+                provider_events=merged_provider_events,
                 next_action="inspect the invalid provider tool proposal",
             )
             return update
@@ -627,11 +903,18 @@ class AsterCodeOrchestrator:
                     *state.get("blockers", []),
                     f"invalid provider tool proposal ({type(exc).__name__})",
                 ],
+                retry_attempts=retry_attempts,
+                provider_events=merged_provider_events,
                 next_action="inspect the invalid provider tool proposal",
             )
             return update
         messages = list(state.get("messages", []))
         conversation = list(state.get("conversation", []))
+        if suppressed_duplicates:
+            messages.append(
+                "host suppressed a duplicate side-effect proposal: "
+                + ", ".join(suppressed_duplicates)
+            )
         if response.decision.message:
             safe_message = str(redact_secrets(response.decision.message))
             messages.append(safe_message)
@@ -643,14 +926,17 @@ class AsterCodeOrchestrator:
             conversation=conversation[-16:],
             provider_outcome=response.decision.outcome,
             provider_response_id=response.response_id,
-            provider_events=[*state.get("provider_events", []), *stream_events][-128:],
+            provider_events=merged_provider_events,
+            retry_attempts=retry_attempts,
         )
         if calls:
             first, *rest = calls
             purpose = first.pop("_purpose")
+            semantic_key = first.pop("_semantic_key")
             update.update(
                 current_call=first,
                 current_purpose=purpose,
+                current_action_key=semantic_key,
                 pending_calls=rest,
                 status=SessionStatus.RUNNING.value,
                 next_action="policy-check proposed tool call",
@@ -686,6 +972,19 @@ class AsterCodeOrchestrator:
         if not _TOOL_NAME.fullmatch(proposal.tool):
             raise ProviderExecutionError("provider proposed an invalid namespace.action tool name")
         arguments = proposal.model_dump(mode="json")["arguments"]
+        if proposal.tool.startswith("ssh."):
+            requested_host = arguments.get("host_id")
+            if not isinstance(requested_host, str) or not requested_host.strip():
+                raise ProviderExecutionError(
+                    "ssh tool proposals require a non-empty arguments.host_id"
+                )
+            host = requested_host
+        else:
+            # The model may describe this as "workspace" or supply arbitrary
+            # host text.  A local tool's execution host is host authority, not
+            # a model-controlled parameter. Remote work must use ssh.* and its
+            # separately allowlisted host_id.
+            host = "local"
         canonical = json.dumps(
             {
                 "session_id": state["session_id"],
@@ -694,7 +993,7 @@ class AsterCodeOrchestrator:
                 "index": index,
                 "tool": proposal.tool,
                 "arguments": arguments,
-                "host": proposal.host,
+                "host": host,
                 "cwd": proposal.cwd,
             },
             ensure_ascii=False,
@@ -707,21 +1006,76 @@ class AsterCodeOrchestrator:
             action_id=f"action_{digest[24:48]}",
             tool=proposal.tool,
             arguments=arguments,
-            host=proposal.host,
+            host=host,
             cwd=proposal.cwd,
             idempotency_key=digest,
         )
 
     @staticmethod
+    def _semantic_action_key(call: ToolCall) -> str:
+        arguments: Any = call.arguments
+        if call.tool == "fs.apply_patch" and isinstance(
+            call.arguments.get("patch"), str
+        ):
+            try:
+                patch_changes: list[tuple[str, str | None, str]] = []
+                for path, old, new in parse_patch(str(call.arguments["patch"])):
+                    if old is None:
+                        patch_changes.append((path, None, new))
+                        continue
+                    old_lines = old.splitlines(keepends=True)
+                    new_lines = new.splitlines(keepends=True)
+                    while old_lines and new_lines and old_lines[0] == new_lines[0]:
+                        old_lines.pop(0)
+                        new_lines.pop(0)
+                    while old_lines and new_lines and old_lines[-1] == new_lines[-1]:
+                        old_lines.pop()
+                        new_lines.pop()
+                    patch_changes.append(
+                        (path, "".join(old_lines), "".join(new_lines))
+                    )
+                arguments = {
+                    "patch_changes": patch_changes
+                }
+            except ValueError:
+                # Malformed patches still proceed to the policy parser, which
+                # fails closed with the authoritative validation error.
+                arguments = call.arguments
+        return hashlib.sha256(
+            json.dumps(
+                {
+                    "tool": call.tool,
+                    "arguments": arguments,
+                    "host": call.host,
+                    "cwd": call.cwd,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+
+    def _tool_has_side_effects(self, tool: str) -> bool:
+        return any(spec.name == tool and bool(spec.side_effects) for spec in self.tools)
+
+    @staticmethod
     def _add_provider_usage(state: AgentState, response: ProviderResponse) -> RunUsage:
+        return AsterCodeOrchestrator._add_provider_usage_value(state, response.usage)
+
+    @staticmethod
+    def _add_provider_usage_value(state: AgentState, usage: ProviderUsage) -> RunUsage:
         prior = RunUsage.model_validate(state.get("usage", {}))
-        cost = None if prior.cost_usd is None or response.usage.cost_usd is None else prior.cost_usd + response.usage.cost_usd
+        cost = (
+            None
+            if prior.cost_usd is None or usage.cost_usd is None
+            else prior.cost_usd + usage.cost_usd
+        )
         return RunUsage(
             rounds=prior.rounds + 1,
             tool_calls=prior.tool_calls,
-            input_tokens=prior.input_tokens + response.usage.input_tokens,
-            output_tokens=prior.output_tokens + response.usage.output_tokens,
-            total_tokens=prior.total_tokens + response.usage.total_tokens,
+            input_tokens=prior.input_tokens + usage.input_tokens,
+            output_tokens=prior.output_tokens + usage.output_tokens,
+            total_tokens=prior.total_tokens + usage.total_tokens,
             cost_usd=cost,
         )
 
@@ -1168,8 +1522,19 @@ class AsterCodeOrchestrator:
                     verified=False,
                     error=f"verification failed ({type(exc).__name__})",
                 )
+        completed_action_keys = list(state.get("completed_action_keys", []))
+        semantic_key = state.get("current_action_key")
+        if (
+            result.status is ToolStatus.COMPLETED
+            and verification.get("verified") is True
+            and semantic_key
+            and semantic_key not in completed_action_keys
+        ):
+            completed_action_keys.append(semantic_key)
         update.update(
             test_status=[*prior_checks, verification],
+            completed_action_keys=completed_action_keys,
+            current_action_key=None,
             next_action=("reconcile unknown side effects read-only" if result.status is ToolStatus.UNKNOWN else "persist checkpoint"),
         )
         return update
@@ -1298,6 +1663,8 @@ class AsterCodeOrchestrator:
             "budget",
             "usage",
             "current_call",
+            "current_action_key",
+            "completed_action_keys",
             "approval_request",
         }
         snapshot = {key: state.get(key) for key in sorted(allowed)}

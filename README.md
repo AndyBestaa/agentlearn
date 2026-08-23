@@ -112,7 +112,7 @@ AsterCode 的 DeepSeek 适配器使用 OpenAI 兼容的 Chat Completions，而�
 
 Claude Code 的 `ANTHROPIC_*` 环境变量、`https://api.deepseek.com/anthropic` 端点以及带 `[1m]` 的 Claude Code 模型别名不会直接用于 AsterCode。这里的模型 ID 必须写成 `deepseek-v4-flash` 或 `deepseek-v4-pro`，不要写成 `deepseek-v4-pro[1m]`，也不要把 `deepseek-v4-flash/pro` 当作一个字面模型名。
 
-如果模型 ID 和对应 key 都未配置，程序继续使用离线 Fake Provider；如果只配置其中一项，live 配置会 fail-closed，而不是偷偷换用另一家 Provider 的凭据。DeepSeek 已有上述三次只读 smoke 证据，但真实 OpenAI 仍未验证；真实 SSH 会话、浏览器外网和其他 live 能力也未验证。第一次 smoke 曾暴露流式分片造成的审计写放大、上下文重复导致的 Token 使用过高，以及 JSONL/SQLite 少一条记录的不一致；随后已完成 delta batching、context compaction、`status=running` 生命周期同步和审计镜像修复。执行 `uv run astercode audit repair --root . --confirm` 追加补回 1 条缺失记录并写入 `audit.mirror_repaired`，当时 `uv run astercode audit verify --root .` 返回 `valid=true, entries=2693`；当前工作区快照为 `valid=true, entries=2707`。第二次低预算复测 session `session_379c1fc09344409abb34c488d87a0bf3` 为 `completed`：实际 2 轮、1 次 P0 `fs.read`、13,636 tokens、约 12.2 秒。第三次复测 session `session_01990918f5774f83aca1bffe08f3d529` 同样为 `completed`：实际 2 轮、1 次 P0 `fs.read`、12,547 输入/1,214 输出（共 13,761）tokens、约 12.3 秒，且 `test_status` 只有一条对应记录，未复现重复项。两次窄任务均无审批，Provider 成本字段为 `null`。这些仍只是窄范围 smoke，不代表 OS 沙箱或其他 live 能力已完成。曾经暴露过的 key 应先在对应提供商控制台撤销，再生成新 key。
+如果模型 ID 和对应 key 都未配置，程序继续使用离线 Fake Provider；如果只配置其中一项，live 配置会 fail-closed，而不是偷偷换用另一家 Provider 的凭据。DeepSeek 已有三次只读 smoke 和一次受控的同会话文件写入/删除 smoke 证据，但真实 OpenAI 仍未验证；真实 SSH 会话、浏览器外网和其他 live 能力也未验证。第一次 smoke 曾暴露流式分片造成的审计写放大、上下文重复导致的 Token 使用过高，以及 JSONL/SQLite 少一条记录的不一致；随后已完成 delta batching、context compaction、`status=running` 生命周期同步和审计镜像修复。执行 `uv run astercode audit repair --root . --confirm` 追加补回 1 条缺失记录并写入 `audit.mirror_repaired`，当时 `uv run astercode audit verify --root .` 返回 `valid=true, entries=2693`。第二次低预算复测 session `session_379c1fc09344409abb34c488d87a0bf3` 为 `completed`：实际 2 轮、1 次 P0 `fs.read`、13,636 tokens、约 12.2 秒。第三次复测 session `session_01990918f5774f83aca1bffe08f3d529` 同样为 `completed`：实际 2 轮、1 次 P0 `fs.read`、12,547 输入/1,214 输出（共 13,761）tokens、约 12.3 秒，且 `test_status` 只有一条对应记录。最终写入回归 session `session_d6dfa158b9ae42b188991116b77858bd` 在同一个 `aster` 对话中完成聊天以及两轮 `create → modify → delete`：7 个用户 turn、6 次单次精确审批、6 次副作用工具调用（4 次 `fs.apply_patch`、2 次 `fs.delete`），宿主逐步按字节核对内容，最终目标文件不存在且审计链有效。该测试没有运行 Shell、Git 或网络工具，Provider 成本字段仍为 `null`。这些仍是有边界的现场 smoke，不代表 OS 沙箱或其他 live 能力已完成。曾经暴露过的 key 应先在对应提供商控制台撤销，再生成新 key。
 
 ## 配置版本与安全迁移
 
@@ -260,9 +260,15 @@ uv lock --check
 uv pip check --python .venv\Scripts\python.exe
 ```
 
-测试不需要 API key、真实网络或 SSH；使用 deterministic Fake Provider、Fake SSH、Fake Browser、Fake MCP/Plugin、Fake 子代理、临时 Git 仓库和 replay fixture。Windows Job Object 已通过本机父子进程树终止、`process.stop` 和分配失败不执行目标代码测试；这只证明进程树约束，不证明文件/网络隔离。2026-08-23 的 DeepSeek 只读 smoke 已通过，但不替代自动化测试，也没有证明成本、长任务、写操作或真实工具权限安全。Playwright + 本机 Edge 的 `about:blank` 离线 smoke 已通过，但外网导航未运行。Linux 实机 bash、PowerShell 7、真实 OpenAI、真实 SSH、浏览器网络、GUI、MCP/plugin live runner 和 OS 沙箱仍需独立验证。
+需要显式配置 DeepSeek 环境变量时，可在一个不包含 `chat_cycle.py` 的临时工作区运行同会话写入回归；脚本只会对该文件申请六次单次审批，并在结束时验证它已被删除：
 
-本轮最终全量回归结果为 `328 passed, 10 skipped`；另有历史本机 Edge 离线 smoke `1 passed, 5 deselected`。skip 仍代表缺少相应平台/权限或 live 条件，不应解释成已通过。
+```powershell
+uv run python scripts/live_chat_cycle_smoke.py --root C:\path\to\empty-test-workspace
+```
+
+自动化测试不需要 API key、真实网络或 SSH；使用 deterministic Fake Provider、Fake SSH、Fake Browser、Fake MCP/Plugin、Fake 子代理、临时 Git 仓库和 replay fixture。上面的 live cycle 是例外，需要显式配置真实 Provider 和 key。Windows Job Object 已通过本机父子进程树终止、`process.stop` 和分配失败不执行目标代码测试；这只证明进程树约束，不证明文件/网络隔离。2026-08-23 的 DeepSeek 只读 smoke 以及受控的同会话文件创建/修改/删除 smoke 已通过，但不替代自动化测试，也没有证明成本、长任务、Shell、远程操作或其他 live 权限安全。Playwright + 本机 Edge 的 `about:blank` 离线 smoke 已通过，但外网导航未运行。Linux 实机 bash、PowerShell 7、真实 OpenAI、真实 SSH、浏览器网络、GUI、MCP/plugin live runner 和 OS 沙箱仍需独立验证。
+
+本轮最终全量回归结果为 `351 passed, 10 skipped`；另有历史本机 Edge 离线 smoke `1 passed, 5 deselected`。skip 仍代表缺少相应平台/权限或 live 条件，不应解释成已通过。
 
 ## 常见问题
 

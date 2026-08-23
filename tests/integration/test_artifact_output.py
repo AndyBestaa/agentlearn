@@ -1,18 +1,250 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import sqlite3
 import sys
+from typing import Any, cast
 
 import pytest
 
 from astercode.config import AppConfig
 from astercode.gateway import LocalToolGateway
-from astercode.models import ApprovalDecision, ToolCall
+from astercode.models import ApprovalDecision, ToolCall, ToolError
 from astercode.orchestrator import GatewayContext
 from astercode.policy import PolicyEngine, RuntimePolicyCapabilities
 from astercode.runtime import build_registry
 from astercode.storage import Storage
 from astercode.tools.base import ToolResult, ToolSpec, new_action_id, timed_result
 from astercode.tools.registry import ToolRegistry
+
+
+@pytest.mark.asyncio
+async def test_gateway_fails_closed_on_an_unknown_handler_result(
+    app_config, storage, tmp_path
+) -> None:
+    storage.create_session(
+        str(tmp_path),
+        "reject an invalid tool result",
+        session_id="session-invalid-result",
+    )
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(
+            "test.invalid_result",
+            "Return an invalid result fixture.",
+            "test.read",
+            schema={"type": "object", "properties": {}, "additionalProperties": False},
+        ),
+        cast(Any, lambda: None),
+    )
+    gateway = LocalToolGateway(registry, PolicyEngine(app_config, storage), storage)
+    call = ToolCall(tool="test.invalid_result", arguments={}, cwd=str(tmp_path))
+
+    result = await gateway.execute(
+        call,
+        GatewayContext(
+            session_id="session-invalid-result",
+            turn_id="turn-invalid-result",
+            goal="reject an invalid tool result",
+            phase="TOOL_CALL",
+        ),
+    )
+
+    assert result.status.value == "failed"
+    assert isinstance(result.error, ToolError)
+    assert result.error.code == "invalid_tool_result"
+
+
+@pytest.mark.asyncio
+async def test_gateway_persists_unknown_side_effect_handler_failure(
+    app_config, storage, tmp_path
+) -> None:
+    session_id = "session-unknown-side-effect"
+    storage.create_session(
+        str(tmp_path),
+        "persist an unknown side-effect result",
+        session_id=session_id,
+    )
+    registry = ToolRegistry()
+
+    def fail_after_start() -> None:
+        raise RuntimeError("controlled handler failure")
+
+    registry.register(
+        ToolSpec(
+            "test.write",
+            "Fail after entering a side-effect boundary.",
+            "test.write",
+            side_effects=("workspace_write",),
+            risk="P1",
+            idempotent=False,
+            schema={"type": "object", "properties": {}, "additionalProperties": False},
+        ),
+        cast(Any, fail_after_start),
+    )
+    gateway = LocalToolGateway(
+        registry,
+        PolicyEngine(app_config, storage),
+        storage,
+        auto_approve=True,
+    )
+    call = ToolCall(tool="test.write", arguments={}, cwd=str(tmp_path))
+    context = GatewayContext(
+        session_id=session_id,
+        turn_id="turn-unknown-side-effect",
+        goal="persist an unknown side-effect result",
+        phase="TOOL_CALL",
+    )
+    authorized = await gateway.authorize(call, context)
+    assert authorized.outcome == "allow"
+
+    result = await gateway.execute(call, context)
+
+    assert result.status.value == "unknown"
+    assert isinstance(result.error, ToolError)
+    assert result.error.code == "executor_state_unknown"
+    with sqlite3.connect(app_config.storage.database_path) as connection:
+        persisted = connection.execute(
+            "SELECT status, result_json FROM tool_calls WHERE call_id=?",
+            (call.call_id,),
+        ).fetchone()
+    assert persisted is not None
+    assert persisted[0] == "unknown"
+    assert json.loads(persisted[1])["error"]["code"] == "executor_state_unknown"
+
+
+@pytest.mark.parametrize(
+    "raw_result",
+    [None, {"status": "bogus"}, {"status": "failed"}],
+    ids=["none", "invalid-status", "failed-without-error"],
+)
+@pytest.mark.asyncio
+async def test_invalid_side_effect_handler_result_is_persisted_as_unknown(
+    app_config, storage, tmp_path, raw_result
+) -> None:
+    session_id = "session-invalid-side-effect-result"
+    storage.create_session(
+        str(tmp_path),
+        "do not treat an invalid side-effect result as a known failure",
+        session_id=session_id,
+    )
+    marker = tmp_path / "side-effect-marker.txt"
+    registry = ToolRegistry()
+
+    def write_then_return_invalid_result() -> Any:
+        marker.write_text("written\n", encoding="utf-8")
+        return raw_result
+
+    registry.register(
+        ToolSpec(
+            "test.invalid_write",
+            "Write a marker, then violate the result contract.",
+            "test.write",
+            side_effects=("workspace_write",),
+            risk="P1",
+            idempotent=False,
+            schema={"type": "object", "properties": {}, "additionalProperties": False},
+        ),
+        cast(Any, write_then_return_invalid_result),
+    )
+    gateway = LocalToolGateway(
+        registry,
+        PolicyEngine(app_config, storage),
+        storage,
+        auto_approve=True,
+    )
+    call = ToolCall(tool="test.invalid_write", arguments={}, cwd=str(tmp_path))
+    context = GatewayContext(
+        session_id=session_id,
+        turn_id="turn-invalid-side-effect-result",
+        goal="do not treat an invalid side-effect result as a known failure",
+        phase="TOOL_CALL",
+    )
+    authorized = await gateway.authorize(call, context)
+    assert authorized.outcome == "allow"
+
+    result = await gateway.execute(call, context)
+
+    assert marker.read_text(encoding="utf-8") == "written\n"
+    assert result.status.value == "unknown"
+    assert isinstance(result.error, ToolError)
+    assert result.error.code == "invalid_tool_result_state_unknown"
+    with sqlite3.connect(app_config.storage.database_path) as connection:
+        persisted = connection.execute(
+            "SELECT status, result_json FROM tool_calls WHERE call_id=?",
+            (call.call_id,),
+        ).fetchone()
+    assert persisted is not None
+    assert persisted[0] == "unknown"
+    assert (
+        json.loads(persisted[1])["error"]["code"]
+        == "invalid_tool_result_state_unknown"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancelled_side_effect_handler_persists_unknown_before_propagating(
+    app_config, storage, tmp_path
+) -> None:
+    session_id = "session-cancelled-side-effect"
+    storage.create_session(
+        str(tmp_path),
+        "persist cancellation after a side-effect boundary",
+        session_id=session_id,
+    )
+    marker = tmp_path / "cancelled-side-effect-marker.txt"
+    entered = asyncio.Event()
+    registry = ToolRegistry()
+
+    async def write_then_wait() -> None:
+        marker.write_text("written\n", encoding="utf-8")
+        entered.set()
+        await asyncio.Event().wait()
+
+    registry.register(
+        ToolSpec(
+            "test.cancelled_write",
+            "Write a marker, then wait for task cancellation.",
+            "test.write",
+            side_effects=("workspace_write",),
+            risk="P1",
+            idempotent=False,
+            schema={"type": "object", "properties": {}, "additionalProperties": False},
+        ),
+        cast(Any, write_then_wait),
+    )
+    gateway = LocalToolGateway(
+        registry,
+        PolicyEngine(app_config, storage),
+        storage,
+        auto_approve=True,
+    )
+    call = ToolCall(tool="test.cancelled_write", arguments={}, cwd=str(tmp_path))
+    context = GatewayContext(
+        session_id=session_id,
+        turn_id="turn-cancelled-side-effect",
+        goal="persist cancellation after a side-effect boundary",
+        phase="TOOL_CALL",
+    )
+    authorized = await gateway.authorize(call, context)
+    assert authorized.outcome == "allow"
+    task = asyncio.create_task(gateway.execute(call, context))
+    await asyncio.wait_for(entered.wait(), timeout=5)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert marker.read_text(encoding="utf-8") == "written\n"
+    with sqlite3.connect(app_config.storage.database_path) as connection:
+        persisted = connection.execute(
+            "SELECT status, result_json FROM tool_calls WHERE call_id=?",
+            (call.call_id,),
+        ).fetchone()
+    assert persisted is not None
+    assert persisted[0] == "unknown"
+    assert json.loads(persisted[1])["error"]["code"] == "tool_cancelled_state_unknown"
 
 
 class LargeOutputTools:

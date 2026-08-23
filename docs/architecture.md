@@ -73,7 +73,7 @@ OpenAI client 固定 `https://api.openai.com/v1`，DeepSeek client 固定 `https
 ### Live 或 OS 边界仍未验证
 
 - OpenAI 真实 API 调用、真实 streaming 质量和账户模型可用性。
-- DeepSeek 的完整 live 能力、账户模型覆盖和真实 streaming 质量；目前只有三次 `deepseek-v4-flash` 只读 smoke，没有覆盖写操作、长任务、成本核对或故障恢复。
+- DeepSeek 的完整 live 能力、账户模型覆盖和真实 streaming 质量；目前有三次 `deepseek-v4-flash` 只读 smoke，以及一次同会话两轮文件创建/修改/删除 smoke。最终写入 session `session_d6dfa158b9ae42b188991116b77858bd` 包含 7 个用户 turn、6 次单次审批和 6 次副作用调用（4 次 `fs.apply_patch`、2 次 `fs.delete`），覆盖了逐步内容核对、精确审批、文件副作用和审计，但没有覆盖 Shell、长任务、成本核对或远程操作。
 - SSH egress allowlist 的 OS 证明、首次指纹登记、真实主机/认证/MFA、SFTP、远程 PID、备份/原子替换/回滚。
 - 浏览器 OS egress 防 SSRF、真实外网导航、下载、提交和登录态工作流；Playwright + Edge 目前只完成无网络引擎 smoke。
 - 原生桌面 GUI（默认关闭）。

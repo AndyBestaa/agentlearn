@@ -25,13 +25,20 @@ pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows Job Object test
 CREATE_NEW_PROCESS_GROUP = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
 
 
-def _wait_for_file(path: Path, timeout: float = 10.0) -> None:
+def _wait_for_pid_file(path: Path, timeout: float = 10.0) -> int:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if path.is_file():
-            return
+        try:
+            value = path.read_text(encoding="ascii").strip()
+            if value:
+                return int(value)
+        except (FileNotFoundError, OSError, ValueError):
+            # ``Path.write_text`` creates the file before its payload becomes
+            # visible. Wait for a complete numeric PID instead of only the
+            # directory entry, otherwise this assertion is race-prone.
+            pass
         time.sleep(0.02)
-    raise AssertionError(f"timed out waiting for {path.name}")
+    raise AssertionError(f"timed out waiting for a complete PID in {path.name}")
 
 
 def _wait_for_identity_change(pid: int, identity: str, timeout: float = 10.0) -> None:
@@ -169,8 +176,7 @@ def test_kill_on_close_terminates_process_tree(tmp_path: Path) -> None:
         job.assign_and_resume(proc.pid)
         parent_identity = ProcessTools.process_identity(proc.pid)
         assert isinstance(parent_identity, str) and parent_identity != "missing"
-        _wait_for_file(child_pid_file)
-        child_pid = int(child_pid_file.read_text(encoding="ascii"))
+        child_pid = _wait_for_pid_file(child_pid_file)
         child_identity = ProcessTools.process_identity(child_pid)
         assert isinstance(child_identity, str) and child_identity != "missing"
 
@@ -315,8 +321,7 @@ def test_process_tools_stop_terminates_full_job_tree(tmp_path: Path) -> None:
     assert started.status == "completed", started.error
     action_id = started.stdout
     try:
-        _wait_for_file(child_pid_file)
-        child_pid = int(child_pid_file.read_text(encoding="ascii"))
+        child_pid = _wait_for_pid_file(child_pid_file)
         child_identity = ProcessTools.process_identity(child_pid)
         assert isinstance(child_identity, str) and child_identity != "missing"
 

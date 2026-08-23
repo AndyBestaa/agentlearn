@@ -130,6 +130,28 @@ def test_recursive_delete_is_p4_default_deny(app_config: AppConfig) -> None:
     assert decision.risk is RiskLevel.P4
 
 
+def test_patch_context_mismatch_is_rejected_before_approval(
+    app_config: AppConfig,
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "value.py").write_text('VALUE = "new"\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="patch context does not match"):
+        PolicyEngine(app_config).evaluate(
+            "fs.apply_patch",
+            {
+                "patch": (
+                    "*** Begin Patch\n"
+                    "*** Update File: value.py\n"
+                    '-VALUE = "old"\n'
+                    '+VALUE = "new"\n'
+                    "*** End Patch"
+                )
+            },
+            cwd=str(tmp_path),
+        )
+
+
 def test_read_only_mode_denies_workspace_write(app_config: AppConfig) -> None:
     readonly = app_config.model_copy(update={"execution_mode": ExecutionMode.READ_ONLY})
     decision = PolicyEngine(readonly).evaluate(

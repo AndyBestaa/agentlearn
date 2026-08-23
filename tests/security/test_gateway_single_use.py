@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -37,6 +38,13 @@ async def test_gateway_approval_lease_is_single_use(
     pending = await gateway.authorize(call, context)
     assert pending.approval_request is not None
     request = pending.approval_request
+    with sqlite3.connect(app_config.storage.database_path) as connection:
+        requested_events = connection.execute(
+            "SELECT COUNT(*) FROM audit_log "
+            "WHERE event_type='approval.requested' AND action_id=?",
+            (call.action_id,),
+        ).fetchone()[0]
+    assert requested_events == 1
     decision = ApprovalDecision(
         approval_id=request.approval_id,
         action_id=request.action_id,

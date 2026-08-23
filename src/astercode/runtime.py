@@ -297,6 +297,9 @@ class Orchestrator:
             max_model_result_chars=8_192,
             max_model_context_chars=24_576,
             max_tool_retries=self.config.model.max_retries,
+            # Model-structure retries are separate from transport/tool retry
+            # settings and are hard-capped to one attempt per decision.
+            max_provider_retries=min(self.config.model.max_retries, 1),
             memory_lookup=lambda query: self.storage.search_memory(query, limit=8),
             event_sink=self._record_stream_event,
         )
@@ -351,7 +354,7 @@ class Orchestrator:
                 "the existing session is non-terminal or has an unresolved action boundary; natural language cannot resume or overwrite it",
             ]
             return reconciled
-        self.storage.save_turn(sid, "user", safe_goal)
+        turn_id = self.storage.save_turn(sid, "user", safe_goal)
         core = await self._ensure_core()
         configured_budget: dict[str, Any] = {
             "max_rounds": self.config.budget.max_rounds,
@@ -368,6 +371,7 @@ class Orchestrator:
         state = core.initial_state(
             safe_goal,
             session_id=sid,
+            turn_id=turn_id,
             budget=configured_budget,
         )
         conversation: list[dict[str, str]] = []

@@ -63,7 +63,7 @@ AsterCode 要保护：
 
 ## 离线安全回归范围
 
-当前 fake/replay 测试覆盖：路径逃逸、恶意 argv、秘密 redaction、审批 hash/过期/单次使用、SSH 主机配置与 known_hosts hash 绑定、host key 变化、远程超时、`ssh.start` 未完成语义、`stop_all`/`close` unknown、Browser 私网/metadata/DNS rebinding、Draft 2020-12 扩展 schema/远程引用拒绝/递归参数风险重判、memory 冲突/投毒 advisory-only、process registry/kill switch、审计验证和 SQLite 并发。系统 OpenSSH 回归还覆盖固定 argv/干净环境、专用 known_hosts 派生指纹、默认关闭、空 allowlist 和网络证明双门槛；Playwright 回归覆盖非持久化 context、每请求 route guard 和默认无 egress 拒绝。配置迁移还覆盖预览、精确备份、原子写、并发冲突、future 版本和环境变量不持久化；数据库覆盖 future/gap/伪造版本、关键表列缺失和非 FTS5 preflight。Windows 实机还覆盖 Job Object 父子树 close/stop、树级 active-process/job-memory/累计 CPU-time 限额、assignment 失败时目标 marker 不出现、重复句柄、并发预算和有界双流 capture；另有回归保证 Provider 路线固定、Git P0 无外部驱动/lazy fetch、通用 process/shell 不绕过专用工具、父子预算/取消和不完整 artifact 标记。本轮全量为 `328 passed, 10 skipped`；历史本机 Edge 离线 smoke 另以显式开关通过，skip 不算能力通过。
+当前 fake/replay 测试覆盖：路径逃逸、恶意 argv、秘密 redaction、审批 hash/过期/单次使用、SSH 主机配置与 known_hosts hash 绑定、host key 变化、远程超时、`ssh.start` 未完成语义、`stop_all`/`close` unknown、Browser 私网/metadata/DNS rebinding、Draft 2020-12 扩展 schema/远程引用拒绝/递归参数风险重判、memory 冲突/投毒 advisory-only、process registry/kill switch、审计验证和 SQLite 并发。系统 OpenSSH 回归还覆盖固定 argv/干净环境、专用 known_hosts 派生指纹、默认关闭、空 allowlist 和网络证明双门槛；Playwright 回归覆盖非持久化 context、每请求 route guard 和默认无 egress 拒绝。配置迁移还覆盖预览、精确备份、原子写、并发冲突、future 版本和环境变量不持久化；数据库覆盖 future/gap/伪造版本、关键表列缺失和非 FTS5 preflight。Windows 实机还覆盖 Job Object 父子树 close/stop、树级 active-process/job-memory/累计 CPU-time 限额、assignment 失败时目标 marker 不出现、重复句柄、并发预算和有界双流 capture；另有回归保证 Provider 路线固定、Git P0 无外部驱动/lazy fetch、通用 process/shell 不绕过专用工具、父子预算/取消和不完整 artifact 标记。本轮全量为 `351 passed, 10 skipped`；历史本机 Edge 离线 smoke 另以显式开关通过，skip 不算能力通过。
 
 审计链当前工作区快照（2026-08-23）为 `valid=true, entries=2707`；这只是会随正常运行增长的验证结果，不代表管理员级不可篡改或固定容量。
 

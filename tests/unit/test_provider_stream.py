@@ -7,7 +7,11 @@ import agents.models.openai_responses as responses_model
 import openai
 import pytest
 
-from astercode.provider import OpenAIAgentsProvider, ProviderRequest
+from astercode.provider import (
+    OpenAIAgentsProvider,
+    ProviderExecutionError,
+    ProviderRequest,
+)
 
 
 @pytest.mark.asyncio
@@ -77,3 +81,80 @@ async def test_live_provider_stream_adapter_uses_sdk_stream_without_network(monk
     assert events[-1].response.response_id == "resp_offline_fixture"
     assert events[-1].response.usage.total_tokens == 7
     assert run.released is True
+
+
+@pytest.mark.asyncio
+async def test_live_provider_does_not_emit_a_secret_split_across_sdk_deltas(
+    monkeypatch,
+) -> None:
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+    class FakeRun:
+        def __init__(self) -> None:
+            self.final_output = {
+                "plan": [],
+                "message": "safe final decision",
+                "tool_calls": [],
+                "outcome": "completed",
+            }
+            self.context_wrapper = SimpleNamespace(
+                usage=SimpleNamespace(
+                    requests=1,
+                    input_tokens=4,
+                    output_tokens=3,
+                    total_tokens=7,
+                )
+            )
+            self.last_response_id = "resp_split_secret_fixture"
+
+        async def stream_events(self):
+            for delta in ("sk-12345678", "abcdefgh"):
+                yield SimpleNamespace(
+                    type="raw_response_event",
+                    data=SimpleNamespace(
+                        type="response.output_text.delta",
+                        delta=delta,
+                    ),
+                )
+
+        def release_agents(self) -> None:
+            return None
+
+        def cancel(self) -> None:
+            return None
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", lambda **kwargs: FakeClient())
+    monkeypatch.setattr(
+        responses_model,
+        "OpenAIResponsesModel",
+        lambda **kwargs: object(),
+    )
+    monkeypatch.setattr(agents, "Agent", lambda **kwargs: object())
+    monkeypatch.setattr(agents, "ModelSettings", lambda **kwargs: kwargs)
+    monkeypatch.setattr(agents, "RunConfig", lambda **kwargs: kwargs)
+    monkeypatch.setattr(agents.Runner, "run_streamed", lambda *args, **kwargs: FakeRun())
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only-placeholder-not-a-real-secret")
+    provider = OpenAIAgentsProvider(
+        model_id="test-model",
+        instructions="test instructions",
+    )
+    request = ProviderRequest(
+        session_id="session-test",
+        turn_id="turn-test",
+        phase="PLAN",
+        goal="reject a split secret",
+        context={},
+        available_tools=[],
+    )
+    observed = []
+
+    with pytest.raises(ProviderExecutionError, match="secret-looking material"):
+        async for event in provider.stream(request):
+            observed.append(event)
+
+    assert [event.type for event in observed] == ["started"]

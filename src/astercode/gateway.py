@@ -18,6 +18,7 @@ from .orchestrator import GatewayAuthorization, GatewayContext
 from .policy import PolicyEngine
 from .security import (
     PathAuthorizationError,
+    action_hash,
     canonical_json,
     canonicalize_authorized_path,
     redact_secrets,
@@ -77,9 +78,11 @@ class LocalToolGateway:
                 persisted.pop("consumed_at", None)
                 request = ApprovalRequest.model_validate(persisted)
         if request is not None and request.action_id != call.action_id:
+            # Bind the policy-generated request to the orchestrator's stable
+            # action id before the single persistence point below. Persisting
+            # here and again in ``persist_request`` creates two identical
+            # approval.requested audit events for one approval.
             request = request.model_copy(update={"action_id": call.action_id})
-            if self.storage is not None:
-                self.storage.save_approval(request)
         if evaluated.decision == "deny":
             return GatewayAuthorization(outcome="deny", risk=evaluated.risk, reason=evaluated.reason)
         if self.dry_run:
@@ -104,6 +107,12 @@ class LocalToolGateway:
             # The action hash is recomputed from the current concrete call;
             # the nonce/request itself must remain the original persisted one.
             if request is None or evaluated.action_hash != request.action_hash:
+                if self.storage is not None and request is not None:
+                    self.storage.update_approval_status(
+                        request.approval_id,
+                        ApprovalStatus.REVOKED,
+                    )
+                self._pending_requests.pop(call.action_id, None)
                 return GatewayAuthorization(outcome="deny", risk=evaluated.risk, reason="action changed since approval request")
             if not self.policy.verify_decision(request, decision):
                 return GatewayAuthorization(outcome="deny", risk=evaluated.risk, reason="approval binding, expiry, or nonce mismatch")
@@ -142,30 +151,53 @@ class LocalToolGateway:
     async def execute(self, call: ToolCall, context: GatewayContext) -> ToolResult:
         execution_started = False
         side_effectful = False
+        real_paths: list[Any] = []
         try:
             call = self._bind_call_cwd(call)
             self.registry.validate_arguments(call.tool, call.arguments)
             spec, handler = self.registry.get(call.tool)
             # Re-resolve the concrete action, but honor only the exact
             # single-use lease created by authorize for P2+ side effects.
-            evaluated = self.policy.evaluate(call.tool, call.arguments, host=call.host, cwd=call.cwd, declared=spec, purpose=context.goal)
-            if self.dry_run:
-                now = utc_now()
-                return ToolResult(
-                    call_id=call.call_id,
-                    action_id=call.action_id,
-                    tool=call.tool,
+            try:
+                evaluated = self.policy.evaluate(
+                    call.tool,
+                    call.arguments,
                     host=call.host,
                     cwd=call.cwd,
-                    started_at=now,
-                    ended_at=utc_now(),
-                    status=ToolStatus.COMPLETED,
-                    stdout="dry-run: no handler was executed",
-                    metadata={
-                        "dry_run": True,
-                        "effective_risk": evaluated.risk.value,
-                        "normalized_action": evaluated.normalized_action,
-                    },
+                    declared=spec,
+                    purpose=context.goal,
+                )
+            except Exception as exc:
+                return self._finalize_result(
+                    call,
+                    context,
+                    self._failure(
+                        call,
+                        "policy_denied",
+                        f"policy revalidation failed ({type(exc).__name__})",
+                    ),
+                )
+            if self.dry_run:
+                now = utc_now()
+                return self._finalize_result(
+                    call,
+                    context,
+                    ToolResult(
+                        call_id=call.call_id,
+                        action_id=call.action_id,
+                        tool=call.tool,
+                        host=call.host,
+                        cwd=call.cwd,
+                        started_at=now,
+                        ended_at=utc_now(),
+                        status=ToolStatus.COMPLETED,
+                        stdout="dry-run: no handler was executed",
+                        metadata={
+                            "dry_run": True,
+                            "effective_risk": evaluated.risk.value,
+                            "normalized_action": evaluated.normalized_action,
+                        },
+                    ),
                 )
             lease = self._approved_actions.get(call.action_id)
             approved_side_effect = False
@@ -173,11 +205,27 @@ class LocalToolGateway:
                 expected_hash, expires_at = lease
                 if expected_hash != evaluated.action_hash or datetime.now(UTC) >= expires_at:
                     self._approved_actions.pop(call.action_id, None)
-                    return self._failure(call, "approval_binding_mismatch", "approved action changed or expired")
+                    return self._finalize_result(
+                        call,
+                        context,
+                        self._failure(
+                            call,
+                            "approval_binding_mismatch",
+                            "approved action changed or expired",
+                        ),
+                    )
                 self._approved_actions.pop(call.action_id, None)
                 approved_side_effect = True
             elif evaluated.decision != "allow":
-                return self._failure(call, "policy_denied", "execute called without an accepted approval")
+                return self._finalize_result(
+                    call,
+                    context,
+                    self._failure(
+                        call,
+                        "policy_denied",
+                        "execute called without an accepted approval",
+                    ),
+                )
             arguments = dict(call.arguments)
             timeout_limits = [float(getattr(spec, "timeout_seconds", getattr(spec, "timeout", 30.0)))]
             if context.execution_timeout_seconds is not None:
@@ -190,11 +238,27 @@ class LocalToolGateway:
                     or not math.isfinite(float(proposed_timeout))
                     or float(proposed_timeout) <= 0
                 ):
-                    return self._failure(call, "invalid_timeout", "tool timeout must be a positive finite number")
+                    return self._finalize_result(
+                        call,
+                        context,
+                        self._failure(
+                            call,
+                            "invalid_timeout",
+                            "tool timeout must be a positive finite number",
+                        ),
+                    )
                 timeout_limits.append(float(proposed_timeout))
             effective_timeout = min(timeout_limits)
             if effective_timeout <= 0 or not math.isfinite(effective_timeout):
-                return self._failure(call, "invalid_timeout", "tool timeout boundary is invalid")
+                return self._finalize_result(
+                    call,
+                    context,
+                    self._failure(
+                        call,
+                        "invalid_timeout",
+                        "tool timeout boundary is invalid",
+                    ),
+                )
             if "timeout" in arguments:
                 # A lower runtime value is a safety narrowing of the already
                 # authorised action; it cannot expand the approval scope.
@@ -222,7 +286,8 @@ class LocalToolGateway:
                 # it is never accepted from model-supplied arguments.
                 arguments["allow_unsandboxed"] = True
             if self.storage is not None:
-                real_paths = evaluated.normalized_action.get("real_paths", [])
+                normalized_paths = evaluated.normalized_action.get("real_paths", [])
+                real_paths = normalized_paths if isinstance(normalized_paths, list) else []
                 path_evidence = self._path_evidence(real_paths if isinstance(real_paths, list) else [])
                 # This record is deliberately written before crossing the
                 # side-effect boundary. A crash after this point is recovered
@@ -245,7 +310,6 @@ class LocalToolGateway:
                         },
                     }
                 )
-            execution_started = True
             lock = (
                 self.storage.workspace_write_lock(
                     call.cwd,
@@ -254,21 +318,221 @@ class LocalToolGateway:
                 if self.storage is not None and workspace_write and call.host == "local" and call.cwd
                 else nullcontext()
             )
+            raw: Any
             with lock:
-                async with asyncio.timeout(effective_timeout):
-                    if inspect.iscoroutinefunction(handler):
-                        raw = await handler(**arguments)
+                if approved_side_effect and lease is not None:
+                    expected_hash, _expires_at = lease
+                    current_normalized = self.policy.normalize(
+                        call.tool,
+                        call.arguments,
+                        host=call.host,
+                        cwd=call.cwd,
+                    )
+                    if action_hash(current_normalized) != expected_hash:
+                        raw = self._failure(
+                            call,
+                            "approval_binding_mismatch",
+                            "approved path state changed before execution",
+                        )
                     else:
-                        # File/Git/process handlers are synchronous OS calls. Keep
-                        # them off the event loop so cancellation and kill-switch
-                        # signals remain responsive while a command is running.
-                        raw = await asyncio.to_thread(handler, **arguments)
-                    if inspect.isawaitable(raw):
-                        raw = await raw
+                        execution_started = True
+                        async with asyncio.timeout(effective_timeout):
+                            if inspect.iscoroutinefunction(handler):
+                                raw = await handler(**arguments)
+                            else:
+                                # File/Git/process handlers are synchronous OS calls. Keep
+                                # them off the event loop so cancellation and kill-switch
+                                # signals remain responsive while a command is running.
+                                raw = await asyncio.to_thread(handler, **arguments)
+                            if inspect.isawaitable(raw):
+                                raw = await raw
+                else:
+                    execution_started = True
+                    async with asyncio.timeout(effective_timeout):
+                        if inspect.iscoroutinefunction(handler):
+                            raw = await handler(**arguments)
+                        else:
+                            raw = await asyncio.to_thread(handler, **arguments)
+                        if inspect.isawaitable(raw):
+                            raw = await raw
             result = self._coerce_result(raw, call)
+            if (
+                execution_started
+                and side_effectful
+                and isinstance(result.error, ToolError)
+                and result.error.code == "invalid_tool_result"
+            ):
+                # Once a side-effect boundary has been crossed, an invalid
+                # executor envelope cannot prove that nothing happened. Keep
+                # the action unknown so recovery reconciles instead of retrying.
+                result = self._unknown(
+                    call,
+                    "invalid_tool_result_state_unknown",
+                    "side-effecting tool returned an invalid result; action state is unknown",
+                )
+            return self._finalize_result(
+                call,
+                context,
+                result,
+                real_paths=real_paths,
+                side_effectful=side_effectful,
+                execution_started=execution_started,
+            )
+        except asyncio.CancelledError:
+            if execution_started and side_effectful:
+                cancelled_result = self._unknown(
+                    call,
+                    "tool_cancelled_state_unknown",
+                    "tool was cancelled after entering a side-effect boundary; action state is unknown",
+                )
+            else:
+                now = utc_now()
+                cancelled_result = ToolResult(
+                    call_id=call.call_id,
+                    action_id=call.action_id,
+                    tool=call.tool,
+                    host=call.host,
+                    cwd=call.cwd,
+                    started_at=now,
+                    ended_at=utc_now(),
+                    status=ToolStatus.CANCELLED,
+                    error=ToolError(
+                        code="tool_cancelled",
+                        message="tool was cancelled before a side effect was confirmed",
+                        retryable=False,
+                    ),
+                )
+            self._finalize_result(
+                call,
+                context,
+                cancelled_result,
+                real_paths=real_paths,
+                side_effectful=side_effectful,
+                execution_started=execution_started,
+            )
+            raise
+        except TimeoutError:
+            if execution_started and side_effectful:
+                result = self._unknown(
+                    call,
+                    "tool_timeout",
+                    "tool timed out; side-effect state is unknown",
+                )
+            else:
+                now = utc_now()
+                result = ToolResult(
+                    call_id=call.call_id,
+                    action_id=call.action_id,
+                    tool=call.tool,
+                    host=call.host,
+                    cwd=call.cwd,
+                    started_at=now,
+                    ended_at=utc_now(),
+                    status=ToolStatus.TIMEOUT,
+                    error=ToolError(
+                        code="tool_timeout",
+                        message="tool exceeded its host-enforced execution timeout",
+                        retryable=False,
+                    ),
+                )
+            return self._finalize_result(
+                call,
+                context,
+                result,
+                real_paths=real_paths,
+                side_effectful=side_effectful,
+                execution_started=execution_started,
+            )
+        except Exception as exc:
+            if execution_started and side_effectful:
+                result = self._unknown(
+                    call,
+                    "executor_state_unknown",
+                    f"executor state is unknown ({type(exc).__name__})",
+                )
+            else:
+                result = self._failure(
+                    call,
+                    "executor_error",
+                    f"executor failed ({type(exc).__name__})",
+                )
+            return self._finalize_result(
+                call,
+                context,
+                result,
+                real_paths=real_paths,
+                side_effectful=side_effectful,
+                execution_started=execution_started,
+            )
+
+    def _finalize_result(
+        self,
+        call: ToolCall,
+        context: GatewayContext,
+        result: ToolResult,
+        *,
+        real_paths: list[Any] | None = None,
+        side_effectful: bool = False,
+        execution_started: bool = False,
+    ) -> ToolResult:
+        """Persist every terminal tool result, including pre-execution failures."""
+
+        paths = real_paths or []
+        try:
             self._track_process(call, context, result)
             self._artifactize(result, context.session_id)
-            if self.storage is not None:
+        except Exception as exc:
+            result = (
+                self._unknown(
+                    call,
+                    "executor_state_unknown",
+                    f"post-execution capture state is unknown ({type(exc).__name__})",
+                )
+                if execution_started and side_effectful
+                else self._failure(
+                    call,
+                    "executor_error",
+                    f"result capture failed ({type(exc).__name__})",
+                )
+            )
+        if self.storage is None:
+            return result
+        try:
+            self.storage.save_tool_call(
+                context.session_id,
+                call.call_id,
+                call.action_id,
+                call.tool,
+                call.arguments,
+                turn_id=context.turn_id,
+                result=result.as_dict(),
+                status=result.status.value,
+                ended_at=result.ended_at.isoformat(),
+            )
+            self.storage.save_checkpoint(
+                {
+                    "session_id": context.session_id,
+                    "turn_id": context.turn_id,
+                    "phase": "POST_TOOL_CALL",
+                    "action_id": call.action_id,
+                    "state": {
+                        "call_id": call.call_id,
+                        "action_id": call.action_id,
+                        "tool": call.tool,
+                        "host": call.host,
+                        "cwd": call.cwd,
+                        "result": result.as_dict(),
+                        "post_evidence": self._path_evidence(paths),
+                    },
+                }
+            )
+        except Exception:
+            if execution_started and side_effectful:
+                unknown = self._unknown(
+                    call,
+                    "checkpoint_failed",
+                    "post-action checkpoint could not be persisted",
+                )
                 try:
                     self.storage.save_tool_call(
                         context.session_id,
@@ -277,54 +541,14 @@ class LocalToolGateway:
                         call.tool,
                         call.arguments,
                         turn_id=context.turn_id,
-                        result=result.as_dict(),
-                        status=result.status.value,
-                        ended_at=result.ended_at.isoformat(),
-                    )
-                    self.storage.save_checkpoint(
-                        {
-                            "session_id": context.session_id,
-                            "turn_id": context.turn_id,
-                            "phase": "POST_TOOL_CALL",
-                            "action_id": call.action_id,
-                            "state": {
-                                "call_id": call.call_id,
-                                "action_id": call.action_id,
-                                "tool": call.tool,
-                                "host": call.host,
-                                "cwd": call.cwd,
-                                "result": result.as_dict(),
-                                "post_evidence": self._path_evidence(real_paths if isinstance(real_paths, list) else []),
-                            },
-                        }
+                        result=unknown.as_dict(),
+                        status=unknown.status.value,
+                        ended_at=unknown.ended_at.isoformat(),
                     )
                 except Exception:
-                    if side_effectful:
-                        return self._unknown(call, "checkpoint_failed", "post-action checkpoint could not be persisted")
-            return result
-        except TimeoutError:
-            if execution_started and side_effectful:
-                return self._unknown(call, "tool_timeout", "tool timed out; side-effect state is unknown")
-            now = utc_now()
-            return ToolResult(
-                call_id=call.call_id,
-                action_id=call.action_id,
-                tool=call.tool,
-                host=call.host,
-                cwd=call.cwd,
-                started_at=now,
-                ended_at=utc_now(),
-                status=ToolStatus.TIMEOUT,
-                error=ToolError(
-                    code="tool_timeout",
-                    message="tool exceeded its host-enforced execution timeout",
-                    retryable=False,
-                ),
-            )
-        except Exception as exc:
-            if execution_started and side_effectful:
-                return self._unknown(call, "executor_state_unknown", f"executor state is unknown ({type(exc).__name__})")
-            return self._failure(call, "executor_error", f"executor failed ({type(exc).__name__})")
+                    pass
+                return unknown
+        return result
 
     async def verify(self, result: ToolResult, context: GatewayContext) -> Mapping[str, Any]:
         # Verification is intentionally evidence-based and does not infer
@@ -392,8 +616,43 @@ class LocalToolGateway:
             payload = raw.as_dict()
         elif isinstance(raw, Mapping):
             payload = dict(raw)
+            supplied_status = payload.get("status")
+            status_text = (
+                supplied_status.value
+                if isinstance(supplied_status, ToolStatus)
+                else supplied_status
+            )
+            valid_statuses = {item.value for item in ToolStatus}
+            missing_failure_evidence = (
+                status_text
+                in {
+                    ToolStatus.FAILED.value,
+                    ToolStatus.TIMEOUT.value,
+                    ToolStatus.CANCELLED.value,
+                }
+                and payload.get("error") is None
+            )
+            if status_text not in valid_statuses or missing_failure_evidence:
+                payload = {
+                    "status": "failed",
+                    "error": ToolError(
+                        code="invalid_tool_result",
+                        message="registered tool returned an invalid result mapping",
+                        retryable=False,
+                    ),
+                }
         else:
-            payload = {"status": "completed", "stdout": str(raw)}
+            payload = {
+                "status": "failed",
+                "error": ToolError(
+                    code="invalid_tool_result",
+                    message=(
+                        "registered tool returned an unsupported result type "
+                        f"({type(raw).__name__})"
+                    ),
+                    retryable=False,
+                ),
+            }
         started = payload.get("started_at") or utc_now()
         ended = payload.get("ended_at") or utc_now()
         if isinstance(started, str):

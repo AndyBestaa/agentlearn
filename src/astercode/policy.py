@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
+import stat
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -51,6 +54,8 @@ _DEDICATED_OR_NETWORK_EXECUTABLES = frozenset(
         "wget",
     }
 )
+_MAX_PRECONDITION_FILE_BYTES = 67_108_864
+_MAX_PRECONDITION_DIRECTORY_ENTRIES = 10_000
 _DESTRUCTIVE_EXECUTABLES = frozenset(
     {
         "bcdedit",
@@ -301,6 +306,131 @@ class PolicyEngine:
             "network_destination": f"ssh://{destination_host}:{configured.port}",
         }
 
+    @staticmethod
+    def _stat_identity(value: os.stat_result) -> dict[str, int]:
+        return {
+            "device": int(value.st_dev),
+            "inode": int(value.st_ino),
+            "mode": int(value.st_mode),
+            "size": int(value.st_size),
+            "modified_ns": int(value.st_mtime_ns),
+            "changed_ns": int(value.st_ctime_ns),
+            "links": int(value.st_nlink),
+        }
+
+    def _capture_path_precondition(
+        self,
+        path: str,
+        *,
+        cwd: str | None,
+        expected: str,
+    ) -> dict[str, Any]:
+        """Capture an approval-time path state without persisting file content."""
+
+        checked = canonicalize_authorized_path(
+            path,
+            self.config.security.authorized_roots,
+            cwd=cwd,
+            must_exist=expected != "absent",
+            reject_unc=self.config.security.reject_unc_paths,
+        )
+        fresh = checked.revalidate(
+            self.config.security.authorized_roots,
+            must_exist=expected != "absent",
+            reject_unc=self.config.security.reject_unc_paths,
+        )
+        if expected == "absent":
+            if fresh.exists:
+                raise ValueError(f"path precondition requires an absent target: {path}")
+            return {
+                "path": str(fresh.resolved),
+                "state": "absent",
+                "anchor_path": str(fresh.identity_path),
+                "anchor_identity": self._stat_identity(
+                    fresh.identity_path.stat(follow_symlinks=False)
+                ),
+            }
+
+        target = fresh.resolved
+        is_junction = bool(getattr(fresh.absolute, "is_junction", lambda: False)())
+        if fresh.absolute.is_symlink() or is_junction:
+            raise ValueError("path precondition refuses symlink or junction targets")
+        parent = canonicalize_authorized_path(
+            target.parent,
+            self.config.security.authorized_roots,
+            must_exist=True,
+            reject_unc=self.config.security.reject_unc_paths,
+        ).revalidate(
+            self.config.security.authorized_roots,
+            must_exist=True,
+            reject_unc=self.config.security.reject_unc_paths,
+        )
+        before_path = target.stat(follow_symlinks=False)
+        binding: dict[str, Any] = {
+            "path": str(target),
+            "parent_path": str(parent.resolved),
+            "parent_identity": self._stat_identity(
+                parent.resolved.stat(follow_symlinks=False)
+            ),
+        }
+        if stat.S_ISREG(before_path.st_mode):
+            if before_path.st_size > _MAX_PRECONDITION_FILE_BYTES:
+                raise ValueError(
+                    "file is too large for an exact approval precondition"
+                )
+            flags = os.O_RDONLY | int(getattr(os, "O_BINARY", 0))
+            flags |= int(getattr(os, "O_NOFOLLOW", 0))
+            descriptor = os.open(target, flags)
+            try:
+                before = os.fstat(descriptor)
+                digest = hashlib.sha256()
+                while True:
+                    chunk = os.read(descriptor, 1024 * 1024)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+                after = os.fstat(descriptor)
+            finally:
+                os.close(descriptor)
+            final_path = target.stat(follow_symlinks=False)
+            if self._stat_identity(before) != self._stat_identity(after) or (
+                int(before.st_dev),
+                int(before.st_ino),
+            ) != (int(final_path.st_dev), int(final_path.st_ino)):
+                raise ValueError("path changed while its approval precondition was captured")
+            if expected == "regular_file" and not stat.S_ISREG(before.st_mode):
+                raise ValueError("path precondition requires a regular file")
+            binding.update(
+                state="regular_file",
+                identity=self._stat_identity(after),
+                sha256=digest.hexdigest(),
+            )
+        elif stat.S_ISDIR(before_path.st_mode):
+            if expected == "regular_file":
+                raise ValueError("path precondition requires a regular file")
+            with os.scandir(target) as stream:
+                entries: list[str] = []
+                for item in stream:
+                    entries.append(item.name)
+                    if len(entries) > _MAX_PRECONDITION_DIRECTORY_ENTRIES:
+                        raise ValueError(
+                            "directory is too large for an exact approval precondition"
+                        )
+            entries.sort()
+            if expected == "deletable" and entries:
+                raise ValueError("non-recursive delete requires an empty directory")
+            final_path = target.stat(follow_symlinks=False)
+            if self._stat_identity(before_path) != self._stat_identity(final_path):
+                raise ValueError("directory changed while its approval precondition was captured")
+            binding.update(
+                state="directory",
+                identity=self._stat_identity(final_path),
+                entries=entries,
+            )
+        else:
+            raise ValueError("path precondition refuses special filesystem objects")
+        return binding
+
     def normalize(self, tool: str, arguments: Mapping[str, Any], *, host: str = "local", cwd: str | None = None) -> dict[str, Any]:
         data: dict[str, Any] = {"tool": tool, "arguments": redact_secrets(dict(arguments)), "host": host, "cwd": cwd}
         if cwd is not None:
@@ -309,12 +439,25 @@ class PolicyEngine:
         # Bind concrete paths to canonical authorized roots in the action hash.
         path_keys = {"path", "source", "destination"}
         paths: list[str] = []
-        for key in path_keys:
+        precondition_targets: list[tuple[str, str]] = []
+        patch_contexts: list[tuple[str, str]] = []
+        for key in ("path", "source", "destination"):
             value = arguments.get(key)
             if isinstance(value, str):
                 checked = canonicalize_authorized_path(value, self.config.security.authorized_roots, cwd=cwd, must_exist=(key in {"path", "source"} and tool not in {"fs.mkdir", "fs.apply_patch", "fs.delete"}), reject_unc=self.config.security.reject_unc_paths)
                 data["arguments"][key] = str(checked.resolved)
                 paths.append(str(checked.resolved))
+                if tool == "fs.delete" and not bool(arguments.get("recursive")):
+                    precondition_targets.append((str(checked.resolved), "deletable"))
+                elif tool == "fs.mkdir" and key == "path":
+                    precondition_targets.append((str(checked.resolved), "absent"))
+                elif tool == "fs.move":
+                    precondition_targets.append(
+                        (
+                            str(checked.resolved),
+                            "existing" if key == "source" else "absent",
+                        )
+                    )
         if tool in {"mcp.invoke", "plugin.invoke"} and isinstance(arguments.get("arguments"), Mapping):
             nested = dict(arguments["arguments"])
             for key in path_keys | {"cwd"}:
@@ -357,7 +500,7 @@ class PolicyEngine:
                     "*** Add File or *** Update File sections, not ---/+++ headers"
                 )
             patch_paths: list[str] = []
-            for path_text, _old, _new in changes:
+            for path_text, old, _new in changes:
                 checked = canonicalize_authorized_path(
                     path_text,
                     self.config.security.authorized_roots,
@@ -366,9 +509,40 @@ class PolicyEngine:
                     reject_unc=self.config.security.reject_unc_paths,
                 )
                 patch_paths.append(str(checked.resolved))
+                precondition_targets.append(
+                    (
+                        str(checked.resolved),
+                        "absent" if old is None else "regular_file",
+                    )
+                )
+                if old is not None:
+                    patch_contexts.append((str(checked.resolved), old))
             data["patch_paths"] = patch_paths
             paths.extend(patch_paths)
-        if paths: data["real_paths"] = paths
+        if paths:
+            data["real_paths"] = paths
+        if precondition_targets:
+            normalized_targets = [item[0] for item in precondition_targets]
+            if len(normalized_targets) != len(set(normalized_targets)):
+                raise ValueError("one action cannot target the same path more than once")
+            if not any(
+                protected_path_reason(path, self.config.security.authorized_roots)
+                for path in normalized_targets
+            ):
+                data["path_preconditions"] = [
+                    self._capture_path_precondition(
+                        path,
+                        cwd=cwd,
+                        expected=expected,
+                    )
+                    for path, expected in precondition_targets
+                ]
+                for path, old in patch_contexts:
+                    raw = Path(path).read_bytes()
+                    encoding = "utf-8-sig" if raw.startswith(b"\xef\xbb\xbf") else "utf-8"
+                    current = raw.decode(encoding).replace("\r\n", "\n")
+                    if old.replace("\r\n", "\n") not in current:
+                        raise ValueError(f"patch context does not match: {path}")
         if tool.startswith("ssh."):
             ssh_target = self._ssh_target_binding(arguments)
             if ssh_target is not None:

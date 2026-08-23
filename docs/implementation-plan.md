@@ -75,7 +75,7 @@
 ### B. 具备独立安全证据后再做 live adapter
 
 - 真实 OpenAI：确认当前安装 SDK 类型定义和账户模型 ID，使用一次性低预算 smoke；key 只来自 `OPENAI_API_KEY` 环境变量/secret broker。
-- 真实 DeepSeek：已使用 `provider="deepseek"`、`DEEPSEEK_API_KEY`、`ASTERCODE_MODEL_ID=deepseek-v4-flash` 完成三次低风险 JSON decision smoke；其暴露的审计写放大、上下文重复和状态同步问题已修复并回归，后两次低预算窄任务均完成。第三次 session `session_01990918f5774f83aca1bffe08f3d529` 为 2 轮、1 次 `fs.read`、13,761 tokens、约 12.3 秒，且未复现重复 `test_status`。下一步是使用可比工作负载做回归、核对账单并覆盖故障路径。不要复用 Claude Code 的 `ANTHROPIC_*` 或 `[1m]` 模型别名。实现与官方[首次调用](https://api-docs.deepseek.com/zh-cn/)和[Chat API](https://api-docs.deepseek.com/api/create-chat-completion)对齐；除这些只读现场验证外，其余 DeepSeek live 能力仍未验证。
+- 真实 DeepSeek：已使用 `provider="deepseek"`、`DEEPSEEK_API_KEY`、`ASTERCODE_MODEL_ID=deepseek-v4-flash` 完成三次低风险只读 smoke，以及一次同会话受控写入 smoke。最终 session `session_d6dfa158b9ae42b188991116b77858bd` 包含聊天和两轮 `create → modify → delete`，实际为 7 个用户 turn、6 次单次精确审批、6 次副作用工具调用（4 次 `fs.apply_patch`、2 次 `fs.delete`）；宿主逐步按字节核对内容，最终测试文件不存在，审计链有效。该现场测试促成了非 SSH host 权威派生、Provider 结构错误有界重试、重复副作用抑制和可复现 live harness；仍需核对账单并覆盖 Shell、长任务及更多故障恢复路径。不要复用 Claude Code 的 `ANTHROPIC_*` 或 `[1m]` 模型别名。实现与官方[首次调用](https://api-docs.deepseek.com/zh-cn/)和[Chat API](https://api-docs.deepseek.com/api/create-chat-completion)对齐。
 - OS sandbox/egress：Windows Job Object 只解决当前运行时的进程树与部分资源约束；下一步评估并实现可验证的文件系统与网络隔离。AppContainer 仅作为候选，未通过 adapter/egress 实测前不能启用；当前主机又没有可用的 Windows Sandbox、Hyper-V、WSL、Docker/Podman 路径。完成 Windows/Linux 隔离、CPU rate/磁盘容量与 Linux cgroup 等资源配额、DNS/IP/redirect 检查后，才能开放生产 process/network。
 - SSH：加入真实 transport 依赖、known_hosts/指纹人工确认和精确 P3 审批；先只读 test，再做远程写流程。
 - Browser：Playwright + Edge 非持久化 context 与离线 `about:blank` 已验证；下一步必须先实现独立 OS egress allowlist，再进行人工外网 allowlist 验证。真实下载、提交和登录态仍关闭。
@@ -84,7 +84,7 @@
 
 ## 每次阶段验收命令
 
-本轮最终全量回归为 `328 passed, 10 skipped`；另有历史本机 Edge 离线 smoke `1 passed, 5 deselected`。10 个 skip 保持为未满足的平台/权限或 live 条件，不计入已完成能力。
+本轮最终全量回归为 `351 passed, 10 skipped`；另有历史本机 Edge 离线 smoke `1 passed, 5 deselected`。10 个 skip 保持为未满足的平台/权限或 live 条件，不计入已完成能力。
 
 ```powershell
 uv run astercode doctor --root .

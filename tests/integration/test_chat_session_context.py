@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -43,6 +44,16 @@ async def test_reused_session_includes_prior_user_and_assistant_context(
         await orchestrator.close()
 
     assert second["session_id"] == first["session_id"]
+    with sqlite3.connect(app_config.storage.database_path) as connection:
+        turn_ids = [
+            str(row[0])
+            for row in connection.execute(
+                "SELECT turn_id FROM turns WHERE session_id=? ORDER BY rowid",
+                (first["session_id"],),
+            )
+        ]
+    assert turn_ids == [first["turn_id"], second["turn_id"]]
+    assert [request.turn_id for request in provider.requests] == turn_ids
     conversation = provider.requests[1].context["conversation"]
     assert conversation == [
         {"role": "user", "content": "Remember that the color is blue."},

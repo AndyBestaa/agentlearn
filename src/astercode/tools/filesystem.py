@@ -253,7 +253,13 @@ class FilesystemTools:
             written: list[str] = []
             for target, checked, updated, existing, encoding, existed in prepared:
                 self._revalidate(checked, must_exist=existed)
-                _atomic_text_write(target, updated, existing, encoding=encoding)
+                _atomic_text_write(
+                    target,
+                    updated,
+                    existing,
+                    encoding=encoding,
+                    replace_existing=existed,
+                )
                 written_targets.append((target, existing, encoding, existed))
                 written.append(str(target))
             result.stdout = _json({"written": written})
@@ -280,7 +286,7 @@ class FilesystemTools:
         try:
             checked = self.resolve_authorized(path, for_write=True)
             target = self._revalidate(checked, must_exist=checked.exists)
-            target.mkdir(parents=True, exist_ok=True)
+            target.mkdir(parents=True, exist_ok=False)
             result.stdout = str(target)
             result.side_effects = ["directory_create"]
         except Exception as exc:
@@ -365,7 +371,14 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _atomic_text_write(path: Path, text: str, previous: str, *, encoding: str = "utf-8") -> None:
+def _atomic_text_write(
+    path: Path,
+    text: str,
+    previous: str,
+    *,
+    encoding: str = "utf-8",
+    replace_existing: bool = True,
+) -> None:
     newline = "\r\n" if "\r\n" in previous else "\n"
     if newline == "\r\n":
         text = text.replace("\r\n", "\n").replace("\n", "\r\n")
@@ -389,7 +402,13 @@ def _atomic_text_write(path: Path, text: str, previous: str, *, encoding: str = 
                 shutil.copystat(path, temp_name, follow_symlinks=False)
             except OSError:
                 os.chmod(temp_name, stat.S_IMODE(previous_stat.st_mode))
-        os.replace(temp_name, path)
+        if replace_existing:
+            os.replace(temp_name, path)
+        else:
+            # Publish an Add patch without overwriting a file that appeared
+            # after approval/preflight. The temp file is on the same volume,
+            # so a hard-link publish is atomic and fails if ``path`` exists.
+            os.link(temp_name, path)
     finally:
         if os.path.exists(temp_name):
             os.unlink(temp_name)
