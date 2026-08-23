@@ -1,0 +1,53 @@
+[project]
+name = "astercode"
+version = "0.1.0"
+description = "A local-first, policy-controlled coding agent built with LangGraph"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "langgraph==1.2.11",
+    "langgraph-checkpoint-sqlite==3.1.1",
+    "openai-agents==0.22.0",
+    "openai==3.3.1",
+    "pydantic==2.13.4",
+    "rich>=14.0,<15.0",
+    "typer>=0.16,<1.0",
+    "platformdirs>=4.3,<5.0",
+    "jsonschema>=4.23,<5.0",
+]
+
+[project.optional-dependencies]
+browser = [
+    "playwright==1.62.0",
+]
+dev = [
+    "pytest>=8.3,<9.0",
+    "pytest-asyncio>=0.25,<1.0",
+    "ruff>=0.12,<1.0",
+    "mypy>=1.15,<2.0",
+    "types-jsonschema>=4.23,<5.0",
+]
+
+[project.scripts]
+astercode = "astercode.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/astercode"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"prompts/coding_agent.md" = "astercode/coding_agent.md"
+"config.example.toml" = "astercode/config.example.toml"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = true
+
+[tool.ruff]
+line-length = 140
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF"]
+ignore = ["B008", "BLE001", "UP017", "UP035", "UP037", "UP042", "RUF001", "RUF002", "RUF022", "E501", "E701", "E702"]

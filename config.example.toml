@@ -1,0 +1,109 @@
+# AsterCode 安全示例配置（UTF-8）。这里不保存 API key、密码、私钥或审批凭证。
+# 复制为项目根目录的 config.toml 后，再按需调整非秘密设置。
+
+config_version = 1
+product_name = "AsterCode"
+project_root = "."
+# target_os = "windows" # 仅在需要覆盖自动检测时填写；Linux 使用 "linux"
+execution_mode = "inspect_then_implement"
+
+[model]
+provider = "deepseek"
+# 不要把 key 写入本文件；这里只保存环境变量名。
+api_key_env = "DEEPSEEK_API_KEY"
+# DeepSeek Chat Completions 只允许官方 HTTPS 根地址；运行时会再次固定并验证。
+base_url = "https://api.deepseek.com"
+# 通过 ASTERCODE_MODEL_ID 设置 deepseek-v4-flash 或 deepseek-v4-pro。
+# 不要使用 Claude Code 的 [1m] 别名，也不要把 flash/pro 当成一个字面模型名。
+# model_id = "deepseek-v4-pro"
+# reasoning = "high" # DeepSeek 适配器支持 low/high/max；none 会关闭 thinking
+timeout_seconds = 120
+max_retries = 2
+decision_max_tokens = 8192
+tracing_enabled = false
+
+# Claude Code 的 ANTHROPIC_* 环境变量及 /anthropic 端点不直接用于 AsterCode。
+# 如需 OpenAI Provider，请改为 provider="openai"、api_key_env="OPENAI_API_KEY"，
+# 删除 base_url，并通过 ASTERCODE_MODEL_ID 设置账户实际可用的 OpenAI 模型。
+
+[budget]
+# 所有 run 默认使用有限预算；也可用 run --max-rounds/--max-tool-calls/
+# --max-tokens/--max-input-tokens/--max-output-tokens/--max-elapsed-seconds
+# 只覆盖当前一次运行。
+max_rounds = 40
+max_tool_calls = 100
+max_tokens = 120000
+max_input_tokens = 100000
+max_output_tokens = 20000
+# max_cost_usd = 5.0
+max_elapsed_seconds = 3600
+max_concurrency = 1
+
+[features]
+browser_automation = true
+native_desktop_gui = false
+multi_agent = false
+
+[security]
+network_mode = "deny_by_default"
+network_allowlist = []
+authorized_roots = ["."]
+authorized_ssh_hosts = []
+reject_unc_paths = true
+approval_ttl_seconds = 600
+artifact_max_bytes = 67108864
+telemetry_enabled = false
+
+[security.ssh]
+# Live SSH also requires an explicitly injected, runtime-attested network
+# allowlist boundary. Configuration alone never enables network access.
+enabled = false
+backend = "openssh"
+connect_timeout_seconds = 15
+
+[security.process]
+# 当前版本没有经过验证的文件系统/网络 OS 沙箱；none 会让生产 CLI
+# 的 process/shell 默认 fail-closed。allow_unsandboxed_process 是旧配置兼容字段；
+# 它不参与当前放行判断，也不能替代 verified sandbox 或 network enforcement。
+sandbox_backend = "none"
+allow_unsandboxed_process = false
+clean_path = []
+max_output_bytes = 1048576
+default_timeout_seconds = 120
+max_timeout_seconds = 3600
+# Windows 会把这些值应用于 Job Object 的树级 active-process、job-memory
+# 和累计 user-mode CPU-time limit；Job Object 只约束进程树/资源，不隔离文件或网络。
+max_processes = 32
+max_memory_bytes = 2147483648
+max_cpu_time_seconds = 600
+
+[security.browser]
+enabled = true
+engine = "disabled"
+allowed_domains = []
+download_dir = ".astercode/downloads"
+max_redirects = 8
+max_download_bytes = 33554432
+isolated_profile_required = true
+
+[security.extensions]
+mcp_enabled = false
+plugins_enabled = false
+mcp_pins = []
+plugin_pins = []
+
+[security.subagents]
+enabled = false
+read_only = true
+max_depth = 1
+max_concurrency = 1
+max_tool_calls = 12
+max_tokens = 8000
+max_elapsed_seconds = 300
+
+[storage]
+database_path = ".astercode/astercode.db"
+audit_jsonl_path = ".astercode/audit.jsonl"
+artifacts_dir = ".astercode/artifacts"
+busy_timeout_ms = 5000
+wal_autocheckpoint_pages = 1000

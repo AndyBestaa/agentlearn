@@ -1,0 +1,26 @@
+[
+  {
+    "plan": ["inspect the requested file"],
+    "message": "Reading the file through the registered tool.",
+    "tool_calls": [
+      {
+        "tool": "fs.read",
+        "arguments": {
+          "path": "sample.txt",
+          "start_line": 1,
+          "end_line": null
+        },
+        "host": "local",
+        "cwd": null,
+        "purpose": "read the workspace file"
+      }
+    ],
+    "outcome": "continue"
+  },
+  {
+    "plan": [],
+    "message": "The requested file was inspected.",
+    "tool_calls": [],
+    "outcome": "completed"
+  }
+]
