@@ -385,3 +385,74 @@ async def test_blank_delete_target_still_fails_closed(
     assert result["status"] == "blocked"
     assert result["tool_results"][0]["status"] == "cancelled"
     assert "PathAuthorizationError" in " ".join(result["blockers"])
+
+
+@pytest.mark.asyncio
+async def test_missing_stat_is_observation_then_create_continues(
+    app_config: AppConfig, storage: Storage, tmp_path: Path
+) -> None:
+    patch = (
+        "*** Begin Patch\n"
+        "*** Add File: expected_missing.py\n"
+        "+FLAG = True\n"
+        "*** End Patch"
+    )
+    provider = DeterministicFakeProvider(
+        [
+            {
+                "plan": ["check", "create"],
+                "message": "Checking whether the target already exists.",
+                "tool_calls": [
+                    {
+                        "tool": "fs.stat",
+                        "arguments": {"path": "expected_missing.py"},
+                        "host": "local",
+                        "cwd": None,
+                        "purpose": "confirm the target is absent before creation",
+                    }
+                ],
+                "outcome": "continue",
+            },
+            {
+                "plan": ["create"],
+                "message": "The missing target is expected; creating it now.",
+                "tool_calls": [
+                    {
+                        "tool": "fs.apply_patch",
+                        "arguments": {"patch": patch},
+                        "host": "local",
+                        "cwd": None,
+                        "purpose": "create the requested file",
+                    }
+                ],
+                "outcome": "continue",
+            },
+            {
+                "plan": [],
+                "message": "The file was created after the absence check.",
+                "tool_calls": [],
+                "outcome": "completed",
+            },
+        ]
+    )
+    runtime = Orchestrator(
+        app_config,
+        provider=provider,
+        registry=build_registry(app_config),
+        storage=storage,
+        auto_approve=True,
+    )
+
+    result = await runtime.run("Create expected_missing.py after checking it")
+    await runtime.close()
+
+    assert result["status"] == "completed"
+    assert [item["status"] for item in result["tool_results"]] == [
+        "failed",
+        "completed",
+    ]
+    missing_error = str(result["tool_results"][0]["error"])
+    assert "does not exist" in missing_error or "cannot resolve path" in missing_error
+    assert (tmp_path / "expected_missing.py").read_text(encoding="utf-8") == (
+        "FLAG = True\n"
+    )

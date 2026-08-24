@@ -86,7 +86,7 @@
 
 ## 每次阶段验收命令
 
-本轮最终全量回归为 `373 passed, 10 skipped`；Docker 专项/现场为 `14 passed`。最新真实 DeepSeek 非 Git 对话回归 session `session_c004966b009d4c479562b714e0d3c56a` 完成 7 个用户回合、6 次 consumed 单次审批、7 次工具调用和 6 次实际副作用，最终文件不存在；空 path 只读现场复测 session `session_0925077d608240018fdb47a936e29a8a` 也为 completed；内联代码恢复 session `session_038b35bb629348e4aa6f9ce66d30063e` 验证拒绝 `python -c` 后自动改用工作区文件并在 Docker sandbox 输出 `5`。另有历史本机 Edge 离线 smoke `1 passed, 5 deselected`。10 个 skip 保持为未满足的平台/权限或 live 条件，不计入已完成能力。
+本轮最终全量回归为 `382 passed, 10 skipped`；Docker 专项/现场为 `14 passed`。最新真实 DeepSeek 非 Git 对话回归 session `session_c004966b009d4c479562b714e0d3c56a` 完成 7 个用户回合、6 次 consumed 单次审批、7 次工具调用和 6 次实际副作用，最终文件不存在；空 path 只读现场复测 session `session_0925077d608240018fdb47a936e29a8a` 也为 completed；内联代码恢复 session `session_038b35bb629348e4aa6f9ce66d30063e` 验证拒绝 `python -c` 后自动改用工作区文件并在 Docker sandbox 输出 `5`。同步后仅保留本地的 sessions `session_7d900a2b47fa47fabebcaf7f4752ba6a`、`session_39f6d00411c04cfb818d68768f36d7e4`、`session_6ca9afec1f89409c9a7efcd582f9b09b`、`session_64c92f4347234e82a332072a5eecfce1` 进一步覆盖纯聊天状态、双循环代码工作、Docker 执行与上下文解释、审批报告、缺失路径观察和拒绝后上下文隔离。另有历史本机 Edge 离线 smoke `1 passed, 5 deselected`。10 个 skip 保持为未满足的平台/权限或 live 条件，不计入已完成能力。
 
 ```powershell
 uv run astercode doctor --root .

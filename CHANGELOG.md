@@ -51,6 +51,8 @@
 - 修复普通非 Git 新目录中 `git.status` 失败会提前结束任务的问题：无副作用、幂等只读失败现在作为有预算上限的观察反馈给模型；本地模型虚拟 cwd 标记由宿主安全绑定到唯一授权工作区，任意其他越界绝对路径仍拒绝。`fs.apply_patch` 仅在原上下文失败且去除单一展示分隔空格后能精确匹配当前文件时规范化 `- old`/`+ new`；已成功写入后的陈旧重复补丁在执行前被策略拒绝、无审批且无副作用，并可由模型继续完成回合。真实同会话双循环与确定性回归均覆盖这些路径。
 - 修复 DeepSeek 在普通新目录中提交 `fs.list(path="")` 时被误判为越界的问题：空字符串及精确的虚拟工作区标记只对 `fs.list/stat/read/search` 映射到宿主唯一授权工作区；写入、移动和删除继续拒绝空目标。真实 DeepSeek session `session_0925077d608240018fdb47a936e29a8a` 使用同样的空 path 完成一次 P0 `fs.list`，无 blocker、审批或副作用。
 - 改进内联解释器拒绝后的自动恢复：`process.exec` 工具契约明确要求运行已审查的工作区文件，不使用 `python -c`、`node -e` 或 `ruby -e`；精确的内联代码策略拒绝现在作为执行前、零副作用、有轮数预算的观察反馈给模型，使其可改用 `python file.py`，而用户拒绝、路径越界和专用工具绕过仍终止。真实 DeepSeek + Docker session `session_038b35bb629348e4aa6f9ce66d30063e` 验证第一条 `python -c` 被拒绝且零副作用，随后 `python inline_add.py` 经精确审批进入 filesystem/network sandbox，输出 `5` 并 completed。
+- 同步后本地多轮回归修复四类状态/上下文问题（暂未推送）：明确的问候与通用概念问答可零工具 completed，工作区/文件/代码动作仍需证据；不存在但仍位于授权根内的只读目标由 handler 返回普通 not-found 观察，越界与链接逃逸继续拒绝；尾随只读 not-found 不再遮蔽前面已验证的删除成功；Provider 只获得 action_id/tool/approved/scope 审批摘要，绝不获得 nonce、approval_id、hash、actor 或 reason；明确拒绝结束旧任务上下文，下一轮不会继续请求被拒绝动作。真实 DeepSeek sessions `session_7d900a2b47fa47fabebcaf7f4752ba6a`、`session_39f6d00411c04cfb818d68768f36d7e4`、`session_6ca9afec1f89409c9a7efcd582f9b09b`、`session_64c92f4347234e82a332072a5eecfce1` 分别覆盖双循环代码操作、Docker 执行与上下文解释、审批报告/删除后缺失验证、拒绝后安全继续。
+- 修复提交 `7590e20` 的 Ubuntu CI 失败：Docker 控制环境测试此前在所有平台都硬编码 `C:\trusted\docker.exe`，POSIX `Path` 会将其视为普通文件名并得到父目录 `.`；测试现使用 pytest 的平台原生临时目录，同时继续验证 Docker 控制进程不会继承 remote daemon、context、配置或代理变量。带 Git 的 Python 3.12 Linux 容器确认远端失败从 1 项降为 0 项，当前快照在 package smoke 之前的锁文件、依赖、compile、pytest、POSIX 专项、ruff、mypy 和构建均通过；本机重复下载 Linux wheelhouse 时受外部 PyPI 超时影响，Windows packaged CLI smoke 和原 GitHub Windows job 已通过。
 - 修复真实多轮对话暴露的 host 权威与 Provider 瞬态结构错误：非 SSH 工具的执行 host 现在由宿主强制为 `local`，SSH host 从已校验的 `arguments.host_id` 派生；不完整 stream、无效结构化 JSON 和无效工具参数只在本次决策尚未执行工具时进行一次有界重试，失败响应的可信 usage 计入预算，并记录 `provider.retry`。无 usage、格式错误事件或超预算均 fail-closed。
 - 修复模型在副作用成功后重复提出等价 patch 的问题：编排器按实际变更行生成语义动作键，在同一 Provider 决策及同一用户 turn 内抑制已验证的重复写入；未验证的启动类结果不会被误记成已完成。审批请求只记录一次。文件审批绑定加入目标/父目录身份、mtime/ctime/大小及常规文件 SHA-256，执行前在工作区锁内复核；新增文件采用 no-clobber 原子发布，未知工具返回类型 fail-closed。Gateway 的拒绝、超时、异常、取消和 unknown 结果现在都经同一终态持久化路径，不再让 `tool_calls` 停留在 `policy_check`；若副作用 handler 返回无效结果，宿主按 `unknown` 处理而不是假定失败且无副作用。
 
@@ -62,7 +64,7 @@
 - Git executor 拒绝仓库级 `include/includeIf` 配置，强制禁用 hooks、外部 diff、commit/tag GPG signing、credential helper 和 askpass；恶意仓库 signing 配置回归通过。
 - Git P0 查询进一步拒绝 filter/diff/merge 外部驱动、fsmonitor 和外部 attributes/excludes 配置，设置 `GIT_NO_LAZY_FETCH=1` 并对 diff/show 禁用 external diff/textconv；通用 process/shell 也拒绝绕过受控 Git、SSH、network 和 delete 路径。
 - 修复首次公开 CI 暴露的跨平台差异：Linux mypy 通过运行时检查访问 Windows-only API 并保持 fail-closed；Windows 8.3 临时目录别名改用文件身份比较；GitHub Actions 升级到 Node 24 action 版本。
-- 最终全量回归：`373 passed, 10 skipped`；Docker 专项/现场为 `14 passed`；历史本机 Edge 离线 smoke 另为 `1 passed, 5 deselected`；skip 不视为能力通过。
+- 最终全量回归：`382 passed, 10 skipped`；Docker 专项/现场为 `14 passed`；历史本机 Edge 离线 smoke 另为 `1 passed, 5 deselected`；skip 不视为能力通过。
 
 ### Not verified / still blocked
 

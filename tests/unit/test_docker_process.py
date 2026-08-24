@@ -101,17 +101,19 @@ def test_copy_wrapper_does_not_evaluate_model_arguments() -> None:
 
 def test_docker_control_environment_drops_remote_and_proxy_overrides(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("DOCKER_HOST", "tcp://attacker.invalid:2375")
     monkeypatch.setenv("DOCKER_CONTEXT", "remote")
     monkeypatch.setenv("DOCKER_CONFIG", r"C:\untrusted")
     monkeypatch.setenv("HTTP_PROXY", "http://attacker.invalid")
-    env = _docker_host_env(Path(r"C:\trusted\docker.exe"))
+    executable = tmp_path / "docker"
+    env = _docker_host_env(executable)
     assert "DOCKER_HOST" not in env
     assert "DOCKER_CONTEXT" not in env
     assert "DOCKER_CONFIG" not in env
     assert "HTTP_PROXY" not in env
-    assert env["PATH"] == r"C:\trusted"
+    assert env["PATH"] == str(tmp_path)
 
 
 def test_local_tag_is_resolved_to_immutable_repo_digest(

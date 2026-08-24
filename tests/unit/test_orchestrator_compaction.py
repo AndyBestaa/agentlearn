@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import cast
 
-from astercode.models import utc_now
+from astercode.models import ToolError, ToolResult, ToolStatus, utc_now
 from astercode.orchestrator import AgentState, AsterCodeOrchestrator
 from astercode.provider import ToolProposal
 
@@ -179,3 +179,43 @@ def test_completion_evidence_must_match_latest_tool_call() -> None:
 
     assert AsterCodeOrchestrator._completion_evidence(mismatched) is False
     assert AsterCodeOrchestrator._completion_evidence(matched) is True
+
+
+def test_trailing_failed_read_does_not_erase_verified_delete_evidence() -> None:
+    now = utc_now()
+    deleted = ToolResult(
+        call_id="call_delete",
+        action_id="action_delete",
+        tool="fs.delete",
+        started_at=now,
+        ended_at=now,
+        status=ToolStatus.COMPLETED,
+        side_effects=["path_delete"],
+    )
+    missing = ToolResult(
+        call_id="call_stat",
+        action_id="action_stat",
+        tool="fs.stat",
+        started_at=now,
+        ended_at=now,
+        status=ToolStatus.FAILED,
+        error=ToolError(code="not_found", message="target is absent"),
+    )
+    state = AsterCodeOrchestrator.initial_state("delete a file")
+    state["tool_results"] = [deleted.as_dict(), missing.as_dict()]
+    state["test_status"] = [
+        {
+            "call_id": deleted.call_id,
+            "action_id": deleted.action_id,
+            "status": "completed",
+            "verified": True,
+        },
+        {
+            "call_id": missing.call_id,
+            "action_id": missing.action_id,
+            "status": "failed",
+            "verified": False,
+        },
+    ]
+
+    assert AsterCodeOrchestrator._completion_evidence(state) is True

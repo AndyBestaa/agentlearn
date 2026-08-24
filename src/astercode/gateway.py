@@ -911,9 +911,14 @@ class LocalToolGateway:
         if call.tool.startswith("fs."):
             path_rules = {
                 "fs.list": {"path": False},
-                "fs.stat": {"path": True},
-                "fs.read": {"path": True},
-                "fs.search": {"path": True},
+                # A missing read target is a normal observation (for example,
+                # stat-before-create). Authorize its nearest existing parent
+                # here, then let the concrete read handler report not-found.
+                # Existing symlink/reparse escapes are still rejected during
+                # canonicalization and again by the handler.
+                "fs.stat": {"path": False},
+                "fs.read": {"path": False},
+                "fs.search": {"path": False},
                 "fs.mkdir": {"path": False},
                 "fs.move": {"source": True, "destination": False},
                 "fs.delete": {"path": True},

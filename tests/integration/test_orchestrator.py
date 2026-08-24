@@ -105,6 +105,19 @@ async def test_approval_interrupt_and_bound_resume(
     assert (tmp_path / "generated").is_dir()
     assert resumed["tool_results"][0]["tool"] == "fs.mkdir"
     assert resumed["approvals"][0]["approval_id"] == request["approval_id"]
+    summaries = provider.requests[-1].context["approval_summaries"]
+    assert summaries == [
+        {
+            "action_id": request["action_id"],
+            "tool": "fs.mkdir",
+            "approved": True,
+            "scope": "once",
+        }
+    ]
+    serialized_summaries = str(summaries)
+    assert request["approval_id"] not in serialized_summaries
+    assert request["nonce"] not in serialized_summaries
+    assert request["action_hash"] not in serialized_summaries
     await orchestrator.close()
 
 
@@ -156,6 +169,66 @@ async def test_changed_approval_binding_never_executes(
 
 
 @pytest.mark.asyncio
+async def test_denial_closes_prior_task_context_before_next_turn(
+    app_config: AppConfig, storage: Storage, tmp_path: Path
+) -> None:
+    provider = DeterministicFakeProvider(
+        [
+            {
+                "plan": ["create"],
+                "message": "Proposing a directory creation.",
+                "tool_calls": [
+                    {
+                        "tool": "fs.mkdir",
+                        "arguments": {"path": "must-stay-absent"},
+                        "host": "local",
+                        "cwd": str(tmp_path),
+                        "purpose": "create the requested directory",
+                    }
+                ],
+                "outcome": "continue",
+            },
+            {
+                "plan": [],
+                "message": "你好，我不会继续此前被拒绝的创建操作。",
+                "tool_calls": [],
+                "outcome": "completed",
+            },
+        ]
+    )
+    runtime = Orchestrator(
+        app_config,
+        provider=provider,
+        registry=build_registry(app_config),
+        storage=storage,
+    )
+
+    paused = await runtime.run("Create must-stay-absent")
+    request = paused["approval_request"]
+    denied = ApprovalDecision(
+        approval_id=request["approval_id"],
+        action_id=request["action_id"],
+        action_hash=request["action_hash"],
+        nonce=request["nonce"],
+        approved=False,
+        actor="integration-test",
+        reason="intentional denial",
+    )
+    denied_state = await runtime.resume(
+        paused["session_id"], denied.model_dump(mode="json")
+    )
+    continued = await runtime.run("你好", session_id=paused["session_id"])
+    await runtime.close()
+
+    assert denied_state["status"] == "blocked"
+    assert continued["status"] == "completed"
+    assert not (tmp_path / "must-stay-absent").exists()
+    assert provider.requests[-1].context["conversation"] == [
+        {"role": "user", "content": "你好"}
+    ]
+
+
+@pytest.mark.asyncio
 async def test_provider_cannot_close_task_without_evidence(app_config, storage) -> None:
     provider = DeterministicFakeProvider(
         [{"plan": [], "message": "done", "tool_calls": [], "outcome": "completed"}]
@@ -163,8 +236,74 @@ async def test_provider_cannot_close_task_without_evidence(app_config, storage) 
     orchestrator = Orchestrator(
         app_config, provider=provider, registry=build_registry(app_config), storage=storage
     )
-    result = await orchestrator.run("claim completion without doing work")
+    result = await orchestrator.run("create code but claim completion without doing work")
     await orchestrator.close()
+    assert result["status"] == "partial"
+    assert "evidence" in " ".join(result["blockers"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "goal",
+    [
+        "你好",
+        "请用一句话解释 Python 函数是什么，不要调用工具",
+        "What is a Python function? Answer without tools.",
+    ],
+)
+async def test_answer_only_conversation_completes_without_tool_evidence(
+    app_config, storage, goal: str
+) -> None:
+    provider = DeterministicFakeProvider(
+        [
+            {
+                "plan": [],
+                "message": "This is an answer-only response.",
+                "tool_calls": [],
+                "outcome": "completed",
+            }
+        ]
+    )
+    orchestrator = Orchestrator(
+        app_config,
+        provider=provider,
+        registry=build_registry(app_config),
+        storage=storage,
+    )
+
+    result = await orchestrator.run(goal)
+    await orchestrator.close()
+
+    assert result["status"] == "completed"
+    assert result["blockers"] == []
+    assert result["tool_results"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "goal",
+    [
+        "只读检查 README.md 并总结",
+        "查看当前工作区有什么文件",
+        "Review this repository and report issues",
+    ],
+)
+async def test_workspace_questions_still_require_tool_evidence(
+    app_config, storage, goal: str
+) -> None:
+    provider = DeterministicFakeProvider(
+        [{"plan": [], "message": "unsupported claim", "tool_calls": [], "outcome": "completed"}]
+    )
+    orchestrator = Orchestrator(
+        app_config,
+        provider=provider,
+        registry=build_registry(app_config),
+        storage=storage,
+    )
+
+    result = await orchestrator.run(goal)
+    await orchestrator.close()
+
     assert result["status"] == "partial"
     assert "evidence" in " ".join(result["blockers"])
 

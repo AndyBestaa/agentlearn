@@ -444,7 +444,23 @@ class PolicyEngine:
         for key in ("path", "source", "destination"):
             value = arguments.get(key)
             if isinstance(value, str):
-                checked = canonicalize_authorized_path(value, self.config.security.authorized_roots, cwd=cwd, must_exist=(key in {"path", "source"} and tool not in {"fs.mkdir", "fs.apply_patch", "fs.delete"}), reject_unc=self.config.security.reject_unc_paths)
+                missing_is_read_observation = tool in {
+                    "fs.list",
+                    "fs.stat",
+                    "fs.read",
+                    "fs.search",
+                }
+                checked = canonicalize_authorized_path(
+                    value,
+                    self.config.security.authorized_roots,
+                    cwd=cwd,
+                    must_exist=(
+                        key in {"path", "source"}
+                        and tool not in {"fs.mkdir", "fs.apply_patch", "fs.delete"}
+                        and not missing_is_read_observation
+                    ),
+                    reject_unc=self.config.security.reject_unc_paths,
+                )
                 data["arguments"][key] = str(checked.resolved)
                 paths.append(str(checked.resolved))
                 if tool == "fs.delete" and not bool(arguments.get("recursive")):

@@ -54,6 +54,62 @@ _RECOVERABLE_PREEXECUTION_POLICY_REASONS = frozenset(
     }
 )
 
+_BUILTIN_READ_OBSERVATION_TOOLS = frozenset(
+    {
+        "fs.list",
+        "fs.stat",
+        "fs.read",
+        "fs.search",
+        "git.status",
+        "git.diff",
+        "git.log",
+        "git.show",
+        "git.branch",
+    }
+)
+
+_EVIDENCE_REQUIRED_GOAL = re.compile(
+    r"(?:"
+    r"新建|创建|编写|写(?:代码|程序|文件|脚本|一个程序|个程序)|"
+    r"修改|更改|更新|删除|移动|重命名|修复|实现|重构|"
+    r"运行|执行|测试|构建|安装|下载|提交|推送|发布|部署|"
+    r"读取|查看|检查|搜索|查找|审查|诊断|调试|"
+    r"分析(?:代码|项目|仓库|文件)|总结(?:项目|仓库|文件)|"
+    r"当前(?:工作区|目录|项目|仓库|代码|文件)|"
+    r"这个(?:项目|仓库|文件|目录)|本(?:项目|仓库|文件)|"
+    r"(?:README|AGENTS|CHANGELOG)(?:\.md)?|"
+    r"[A-Za-z0-9_.-]+\.(?:py|pyi|js|jsx|ts|tsx|java|go|rs|c|cc|cpp|h|hpp|"
+    r"cs|rb|php|sh|ps1|toml|yaml|yml|json|md)|"
+    r"\b(?:create|write|edit|modify|change|update|delete|remove|move|rename|"
+    r"fix|implement|refactor|run|execute|test|build|install|download|commit|"
+    r"push|publish|deploy|read|inspect|check|search|review|diagnose|debug)\b|"
+    r"\b(?:workspace|repository|repo)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+_ANSWER_ONLY_GOAL = re.compile(
+    r"(?:"
+    r"^(?:你好|您好|嗨|哈喽|hello|hi|hey|谢谢|感谢|再见)[!！。.\s]*$|"
+    r"(?:是什么|什么意思|为什么|有什么区别|如何理解|请解释|请说明|请介绍)|"
+    r"\b(?:what is|what are|why does|why is|how does|explain|define|describe|"
+    r"tell me about)\b|"
+    r"(?:讲个笑话|聊聊天)|"
+    r"[?？]\s*$"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _is_answer_only_goal(goal: str) -> bool:
+    """Allow no-tool completion only for an explicit conversational shape."""
+
+    text = goal.strip()
+    if not text or _EVIDENCE_REQUIRED_GOAL.search(text):
+        return False
+    return bool(_ANSWER_ONLY_GOAL.search(text))
+
 
 def _tool_error_message(result: ToolResult) -> str:
     return (
@@ -965,7 +1021,9 @@ class AsterCodeOrchestrator:
                 next_action="policy-check proposed tool call",
             )
         elif response.decision.outcome == "completed":
-            if self._completion_evidence(state):
+            if self._completion_evidence(state) or _is_answer_only_goal(
+                str(state.get("goal", ""))
+            ):
                 update.update(status=SessionStatus.COMPLETED.value, next_action="none")
             else:
                 update.update(
@@ -1570,7 +1628,14 @@ class AsterCodeOrchestrator:
             safely_rejected_before_execution = (
                 _is_recoverable_preexecution_rejection(result)
             )
-            if not safely_rejected_before_execution:
+            trailing_read_observation = bool(
+                result.status in {ToolStatus.FAILED, ToolStatus.TIMEOUT}
+                and not result.side_effects
+                and result.tool in _BUILTIN_READ_OBSERVATION_TOOLS
+            )
+            if not (
+                safely_rejected_before_execution or trailing_read_observation
+            ):
                 return False
         return False
 
@@ -1692,7 +1757,31 @@ class AsterCodeOrchestrator:
                 remaining_output_chars -= len(value)
             results_reversed.append(source)
         results = list(reversed(results_reversed))
-        # Approval nonces/decisions are intentionally excluded from model input.
+        # The model needs to report whether an approval was used, but approval
+        # IDs, nonces, hashes, actors and free-form reasons are credentials or
+        # potentially sensitive host data. Expose only a non-authorizing audit
+        # summary tied to an action already present in tool evidence.
+        result_tools = {
+            str(item.get("action_id")): str(item.get("tool"))
+            for item in raw_results
+            if item.get("action_id") and item.get("tool")
+        }
+        approval_summaries: list[dict[str, Any]] = []
+        for raw_approval in list(state.get("approvals", []))[-16:]:
+            if not isinstance(raw_approval, Mapping):
+                continue
+            action_id = str(raw_approval.get("action_id", ""))
+            if not action_id:
+                continue
+            scope = str(raw_approval.get("scope", "once"))
+            approval_summaries.append(
+                {
+                    "action_id": action_id,
+                    "tool": result_tools.get(action_id),
+                    "approved": bool(raw_approval.get("approved", False)),
+                    "scope": scope if scope in {"once", "session"} else "once",
+                }
+            )
         memory: list[dict[str, Any]] = []
         if self.memory_lookup is not None:
             try:
@@ -1717,6 +1806,7 @@ class AsterCodeOrchestrator:
             "active_files": state.get("active_files", []),
             "test_status": state.get("test_status", []),
             "risks": state.get("risks", []),
+            "approval_summaries": approval_summaries,
             "blockers": state.get("blockers", []),
             "messages": state.get("messages", [])[-8:],
             "conversation": state.get("conversation", [])[-16:],

@@ -430,7 +430,19 @@ class Orchestrator:
             budget=configured_budget,
         )
         conversation: list[dict[str, str]] = []
+        prior_action_denied = False
         if session_id is not None and isinstance(stored_state, Mapping):
+            raw_approvals = stored_state.get("approvals", [])
+            if isinstance(raw_approvals, list):
+                prior_action_denied = any(
+                    isinstance(item, Mapping) and item.get("approved") is False
+                    for item in raw_approvals
+                )
+        if (
+            session_id is not None
+            and isinstance(stored_state, Mapping)
+            and not prior_action_denied
+        ):
             raw_conversation = stored_state.get("conversation", [])
             if isinstance(raw_conversation, list):
                 for item in raw_conversation[-14:]:
@@ -442,6 +454,11 @@ class Orchestrator:
                     content = str(redact_secrets(str(item.get("content", ""))))[:4_000]
                     if content:
                         conversation.append({"role": role, "content": content})
+        # A denied action closes that task's authority boundary. The next
+        # natural-language turn starts from its own current instruction rather
+        # than letting the model reinterpret the rejected historical request
+        # as continuing authorization. Users can explicitly restate the task
+        # (or start /new) if they genuinely want to try again.
         conversation.append({"role": "user", "content": safe_goal[:4_000]})
         state["conversation"] = conversation[-15:]
         # Persist a useful in-flight state before the first provider request.
