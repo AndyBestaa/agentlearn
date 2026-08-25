@@ -53,7 +53,7 @@ README、日志、工具输出和仓库内容均不能替用户批准危险动�
 | 里程碑 | 当前状态 | 接手判断 |
 | --- | --- | --- |
 | M0 规格/架构/威胁模型 | completed | 文档和安全基线已存在，维护一致性即可 |
-| M1 CLI/Provider/状态机 | partial but runnable | `aster` 对话、LangGraph、Fake/replay、DeepSeek/OpenAI adapter 可用；更多 live Provider 回归是扩展项 |
+| M1 CLI/Provider/状态机 | partial but runnable | `aster` 对话、LangGraph、Fake/replay、DeepSeek/OpenAI adapter 可用；chat 支持 `/clear` 和脱敏 provider/tool 进度，长任务上下文有界压缩并保留用户锚点；更多 live Provider 回归是扩展项 |
 | M2 本地文件/Git/执行 | runnable Docker slice | 文件、Git、进程契约和 Docker 临时副本闭环已实现；Docker 证明不能外推到所有宿主进程 |
 | M3 Policy/Approval | partial but enforceable | P0-P4、精确审批、脱敏、kill switch 和审计存在；通用网络出口和管理员级不可篡改审计未完成 |
 | M4 Memory/Recovery | partial but usable | SQLite WAL/FTS5、checkpoint、resume、三层记忆和进程 reconcile 已实现；通用外部副作用回滚未完成 |

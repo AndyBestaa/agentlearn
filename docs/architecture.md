@@ -48,7 +48,7 @@ stateDiagram-v2
 
 入口在 `astercode.cli`；兼容命令为 `astercode`，快捷入口 `aster` 在无参数时注入 `chat`，有参数时保留完整命令面。命令包括 `init`、`doctor`、`run`、`chat`、`resume`、`status`、`kill`、`sessions`、`memory`、`config`、`permissions`、`audit` 和 `ssh hosts`。快捷对话最终把规范化启动目录绑定为唯一授权根，并在宿主终端内收集精确审批；普通对话文本不构成批准。新项目使用 `astercode.toml`，旧版 AsterCode `config.toml` 仅在识别到版本和产品字段时兼容，避免误读其他应用的通用配置。`config migrate` 默认只预览 `config_version=1` 规范化结果，只有 `--write` 才会在精确备份和并发冲突检查后原子替换源文件；旧格式由测试 fixture 覆盖，被 Git 忽略的机器本地配置不属于源码交接物。CLI 不直接拼接或执行模型给出的 shell；所有动作经过 registry、policy 和 gateway。
 
-`run --stream` 将 provider delta、工具生命周期和完成事件打印为经过脱敏的事件。`--replay` 只读取授权根目录内的 JSON 数组 fixture，禁止疑似秘密和过大输入。run 的默认预算是 40 rounds、100 tool calls、120,000 total tokens、100,000 input tokens、20,000 output tokens 和 3,600 秒；`--max-rounds`、`--max-tool-calls`、`--max-tokens`、`--max-input-tokens`、`--max-output-tokens`、`--max-elapsed-seconds` 可以只覆盖当前 run。
+`run --stream` 将 provider delta、工具生命周期和完成事件打印为经过脱敏的事件；交互 `chat` 只显示 provider/tool 的安全生命周期摘要，不把结构化 provider JSON 当作聊天文本。`/clear` 解除当前 session 绑定并开始新的对话上下文。对话历史使用有界压缩保留用户锚点和最近助手决策，避免长编码任务的内部轮次尾截断所有用户请求。`--replay` 只读取授权根目录内的 JSON 数组 fixture，禁止疑似秘密和过大输入。run 的默认预算是 40 rounds、100 tool calls、120,000 total tokens、100,000 input tokens、20,000 output tokens 和 3,600 秒；`--max-rounds`、`--max-tool-calls`、`--max-tokens`、`--max-input-tokens`、`--max-output-tokens`、`--max-elapsed-seconds` 可以只覆盖当前 run。
 
 ### Orchestrator 层
 

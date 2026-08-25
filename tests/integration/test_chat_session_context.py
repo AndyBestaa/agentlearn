@@ -63,6 +63,61 @@ async def test_reused_session_includes_prior_user_and_assistant_context(
 
 
 @pytest.mark.asyncio
+async def test_long_internal_turn_keeps_user_anchor_for_follow_up(
+    app_config, storage
+) -> None:
+    """Internal model rounds must not evict the original user request."""
+
+    provider = DeterministicFakeProvider(
+        [
+            {
+                "plan": [],
+                "message": f"internal round {index}",
+                "tool_calls": [],
+                "outcome": "continue",
+            }
+            for index in range(18)
+        ]
+        + [
+            {
+                "plan": [],
+                "message": "The first conversation is complete.",
+                "tool_calls": [],
+                "outcome": "completed",
+            },
+            {
+                "plan": [],
+                "message": "The follow-up is complete.",
+                "tool_calls": [],
+                "outcome": "completed",
+            },
+        ]
+    )
+    orchestrator = Orchestrator(
+        app_config,
+        provider=provider,
+        registry=build_registry(app_config),
+        storage=storage,
+    )
+    try:
+        first = await orchestrator.run("What is the parser task?")
+        assert first["status"] == "completed"
+        second = await orchestrator.run(
+            "What did I ask you to remember?", session_id=first["session_id"]
+        )
+    finally:
+        await orchestrator.close()
+
+    assert second["status"] == "completed"
+    follow_up_context = provider.requests[-1].context["conversation"]
+    assert {item["content"] for item in follow_up_context if item["role"] == "user"} == {
+        "What is the parser task?",
+        "What did I ask you to remember?",
+    }
+    assert len(follow_up_context) <= 16
+
+
+@pytest.mark.asyncio
 async def test_natural_language_cannot_replace_a_pending_approval(
     app_config, storage, tmp_path: Path
 ) -> None:

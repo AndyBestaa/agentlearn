@@ -58,6 +58,42 @@ def test_stream_event_escapes_terminal_controls(monkeypatch) -> None:
     assert "\u202e" not in rendered
 
 
+def test_chat_progress_hides_model_json_and_renders_safe_lifecycle(monkeypatch) -> None:
+    output = StringIO()
+    monkeypatch.setattr(
+        cli,
+        "console",
+        Console(file=output, force_terminal=False, color_system=None),
+    )
+
+    cli._print_chat_event(
+        {
+            "event": "provider.delta",
+            "delta": '{"internal":"must not be displayed"}',
+        }
+    )
+    cli._print_chat_event({"event": "provider.started"})
+    cli._print_chat_event({"event": "provider.retry", "attempt": 2})
+    cli._print_chat_event(
+        {"event": "tool.started", "tool": "fs.read\x1b[2J\u202e", "attempt": 1}
+    )
+    cli._print_chat_event(
+        {"event": "tool.completed", "tool": "fs.read", "status": "completed"}
+    )
+    cli._print_chat_event({"event": "tool.retry", "tool": "fs.read", "attempt": 2})
+
+    rendered = output.getvalue()
+    assert "must not be displayed" not in rendered
+    assert "正在分析任务" in rendered
+    assert "模型响应异常" in rendered
+    assert "执行 fs.read" in rendered
+    assert "fs.read: completed" in rendered
+    assert "fs.read 失败，正在重试" in rendered
+    assert "\x1b" not in rendered
+    assert "\u202e" not in rendered
+    assert r"\x1b[2J\u202e" in rendered
+
+
 def test_chat_result_uses_human_status_and_completion_labels(monkeypatch) -> None:
     output = StringIO()
     monkeypatch.setattr(
@@ -95,6 +131,31 @@ def test_chat_result_uses_human_status_and_completion_labels(monkeypatch) -> Non
     assert "✓ 已完成" in rendered
     assert "已安全停止（blocked）" in rendered
     assert "原因：sandbox attestation failed" in rendered
+
+
+def test_chat_result_deduplicates_tool_already_shown_by_live_progress(monkeypatch) -> None:
+    output = StringIO()
+    monkeypatch.setattr(
+        cli,
+        "console",
+        Console(file=output, force_terminal=False, color_system=None),
+    )
+
+    cli._print_chat_result(
+        {
+            "status": "completed",
+            "messages": ["已验证。"],
+            "tool_results": [{"action_id": "action_live", "tool": "fs.read", "status": "completed"}],
+            "blockers": [],
+        },
+        set(),
+        {"action_live"},
+    )
+
+    rendered = output.getvalue()
+    assert "工具 fs.read" not in rendered
+    assert "Aster> 已验证。" in rendered
+    assert "✓ 已完成" in rendered
 
 
 def test_chat_status_is_a_compact_summary(monkeypatch) -> None:
@@ -396,6 +457,7 @@ def test_project_selected_live_provider_cannot_start_from_chat(tmp_path: Path, m
 
     assert result.exit_code == 0, result.output
     assert "fake/" in result.output
+    assert "Key：不需要（fake）" in result.output
 
 
 def test_strict_shortcut_rejects_a_broad_home_workspace(monkeypatch) -> None:
@@ -512,6 +574,66 @@ def test_chat_locks_a_reconciled_nonterminal_session(tmp_path: Path, monkeypatch
 
     assert result.exit_code == 0, result.output
     assert "当前会话因未确认的动作边界而锁定" in result.output
+
+
+def test_chat_clear_starts_a_fresh_session_context(tmp_path: Path, monkeypatch) -> None:
+    """Claude Code-style ``/clear`` must discard the active session binding."""
+
+    (tmp_path / ".astercode").mkdir()
+    session_bindings: list[str | None] = []
+
+    def fake_run(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        del args
+        session_bindings.append(kwargs.get("session_id"))
+        turn = len(session_bindings)
+        return {
+            "session_id": f"session_{turn}",
+            "status": "completed",
+            "messages": [f"turn {turn}"],
+            "tool_results": [],
+            "blockers": [],
+        }
+
+    monkeypatch.setattr(cli, "_run_task_impl", fake_run)
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["chat", "--root", str(tmp_path), "--fake"],
+        input="first task\n/clear\nsecond task\n/exit\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert session_bindings == [None, None]
+    assert "已清除当前会话上下文，开始新会话" in result.output
+
+
+def test_chat_enables_compact_progress_without_raw_provider_output(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / ".astercode").mkdir()
+    run_options: list[dict[str, Any]] = []
+
+    def fake_run(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        del args
+        run_options.append(kwargs)
+        return {
+            "session_id": "session_progress",
+            "status": "completed",
+            "messages": ["done"],
+            "tool_results": [],
+            "blockers": [],
+        }
+
+    monkeypatch.setattr(cli, "_run_task_impl", fake_run)
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["chat", "--root", str(tmp_path), "--fake"],
+        input="inspect the project\n/exit\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(run_options) == 1
+    assert run_options[0]["stream"] is True
+    assert run_options[0]["interactive_progress"] is True
 
 
 def test_chat_collects_bound_approval_instead_of_treating_text_as_consent(tmp_path: Path, monkeypatch) -> None:

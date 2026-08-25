@@ -128,6 +128,45 @@ def test_provider_context_bounds_repeated_tool_output() -> None:
     assert model_results[-1]["truncated"] is True
 
 
+def test_conversation_compaction_keeps_user_turns_after_many_internal_decisions() -> None:
+    """A long coding turn must not turn the next prompt into assistant-only history."""
+
+    history: list[dict[str, str]] = [
+        {"role": "user", "content": "Find and fix the parser bug."}
+    ]
+    history.extend(
+        {"role": "assistant", "content": f"internal decision {index}"}
+        for index in range(18)
+    )
+    history.append({"role": "user", "content": "What changed?"})
+
+    compacted = AsterCodeOrchestrator.compact_conversation(history)
+
+    assert len(compacted) <= 16
+    assert {item["content"] for item in compacted if item["role"] == "user"} == {
+        "Find and fix the parser bug.",
+        "What changed?",
+    }
+    assert compacted[-1] == {"role": "user", "content": "What changed?"}
+
+
+def test_conversation_compaction_enforces_character_bound() -> None:
+    history = [
+        {"role": "user", "content": "u" * 4_000},
+        *(
+            {"role": "assistant", "content": "a" * 4_000}
+            for _ in range(8)
+        ),
+    ]
+
+    compacted = AsterCodeOrchestrator.compact_conversation(
+        history, max_messages=16, max_chars=1_024
+    )
+
+    assert sum(len(item["content"]) for item in compacted) <= 1_024
+    assert compacted[0]["role"] == "user"
+
+
 def test_completion_evidence_must_match_latest_tool_call() -> None:
     now = utc_now().isoformat()
     result: dict[str, object] = {

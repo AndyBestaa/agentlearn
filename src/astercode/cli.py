@@ -511,6 +511,8 @@ def _run_task_impl(
     fake: bool,
     auto_approve: bool,
     stream: bool = False,
+    interactive_progress: bool = False,
+    progress_actions: set[str] | None = None,
     replay: Path | None = None,
     dry_run: bool = False,
     budget_overrides: dict[str, Any] | None = None,
@@ -526,6 +528,8 @@ def _run_task_impl(
             fake=fake,
             auto_approve=auto_approve,
             stream=stream,
+            interactive_progress=interactive_progress,
+            progress_actions=progress_actions,
             replay=replay,
             dry_run=dry_run,
             budget_overrides=budget_overrides,
@@ -542,6 +546,8 @@ async def _run_task_async(
     fake: bool,
     auto_approve: bool,
     stream: bool = False,
+    interactive_progress: bool = False,
+    progress_actions: set[str] | None = None,
     replay: Path | None = None,
     dry_run: bool = False,
     budget_overrides: dict[str, Any] | None = None,
@@ -582,7 +588,10 @@ async def _run_task_async(
     def show_event(event: Any) -> None:
         if not stream:
             return
-        _print_stream_event(event)
+        if interactive_progress:
+            _print_chat_event(event, progress_actions)
+        else:
+            _print_stream_event(event)
 
     orchestrator = Orchestrator(
         cfg,
@@ -622,6 +631,51 @@ def _print_stream_event(event: Any) -> None:
     console.print(_terminal_safe(line), style="dim", markup=False, highlight=False)
 
 
+def _print_chat_event(event: Any, progress_actions: set[str] | None = None) -> None:
+    """Render compact safe progress without exposing structured model JSON."""
+
+    if not isinstance(event, Mapping):
+        return
+    event_type = str(event.get("event", ""))
+    if event_type == "provider.started":
+        console.print("· 正在分析任务…", style="dim", markup=False)
+    elif event_type == "provider.retry":
+        attempt = event.get("attempt", "?")
+        console.print(
+            _terminal_safe(f"↻ 模型响应异常，正在重试（第 {attempt} 次）"),
+            style="yellow",
+            markup=False,
+        )
+    elif event_type == "tool.started":
+        tool = _terminal_safe(event.get("tool", "unknown"))
+        attempt = event.get("attempt")
+        suffix = f"（第 {attempt} 次）" if attempt not in (None, "") else ""
+        console.print(
+            _terminal_safe(f"→ 执行 {tool}{suffix}"),
+            style="dim",
+            markup=False,
+        )
+    elif event_type == "tool.retry":
+        tool = _terminal_safe(event.get("tool", "unknown"))
+        attempt = event.get("attempt", "?")
+        console.print(
+            _terminal_safe(f"↻ {tool} 失败，正在重试（第 {attempt} 次）"),
+            style="yellow",
+            markup=False,
+        )
+    elif event_type == "tool.completed":
+        tool = _terminal_safe(event.get("tool", "unknown"))
+        status = _terminal_safe(event.get("status", "unknown"))
+        action_id = str(event.get("action_id", ""))
+        if progress_actions is not None and action_id:
+            progress_actions.add(action_id)
+        console.print(
+            _terminal_safe(f"← {tool}: {status}"),
+            style="dim",
+            markup=False,
+        )
+
+
 def _prepare_chat_workspace(root: Path) -> None:
     try:
         root = validate_strict_workspace_root(root)
@@ -650,6 +704,7 @@ def _chat_help() -> None:
         "  /help              显示帮助\n"
         "  /status            查看当前会话摘要（完整 JSON 可用 astercode status --session ID）\n"
         "  /new               开始新会话\n"
+        "  /clear             清除当前会话上下文并开始新会话\n"
         "  /resume SESSION_ID 切换到已有会话\n"
         "  /exit              退出（也支持 exit、quit、:q）"
     )
@@ -672,13 +727,26 @@ def _chat_status_label(status: object) -> str:
     return f"{translated}（{raw}）"
 
 
-def _print_chat_result(result: Mapping[str, Any], seen_actions: set[str]) -> None:
+def _print_chat_result(
+    result: Mapping[str, Any],
+    seen_actions: set[str],
+    progress_actions: set[str] | None = None,
+) -> None:
     new_tool_results = 0
-    for item in result.get("tool_results", []) if isinstance(result.get("tool_results"), list) else []:
+    progress_actions = progress_actions or set()
+    raw_tool_results = result.get("tool_results", [])
+    tool_results = raw_tool_results if isinstance(raw_tool_results, list) else []
+    for item in tool_results:
         if not isinstance(item, Mapping):
             continue
         action_id = str(item.get("action_id", ""))
         if action_id and action_id in seen_actions:
+            continue
+        if action_id and action_id in progress_actions:
+            # The lifecycle renderer already showed this result.  Remember it
+            # for later turns so a resumed/follow-up result is not printed
+            # twice, while still retaining the final completion marker.
+            seen_actions.add(action_id)
             continue
         if action_id:
             seen_actions.add(action_id)
@@ -693,7 +761,14 @@ def _print_chat_result(result: Mapping[str, Any], seen_actions: set[str]) -> Non
         console.print("Aster> ", style="bold cyan", end="")
         console.print(_terminal_safe(messages[-1]), markup=False, highlight=False)
     status = str(result.get("status", "unknown"))
-    if status == "completed" and new_tool_results:
+    displayed_progress = progress_actions.intersection(
+        {
+            str(item.get("action_id", ""))
+            for item in tool_results
+            if isinstance(item, Mapping)
+        }
+    )
+    if status == "completed" and (new_tool_results or displayed_progress):
         console.print("✓ 已完成", style="green", markup=False)
     elif status not in {"completed", "running"}:
         console.print(
@@ -892,8 +967,9 @@ def chat(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), fake:
         markup=False,
     )
     provider = "fake" if fake else cfg.model.provider
+    key_status = "不需要（fake）" if provider == "fake" else ("PRESENT" if key_present else "UNSET")
     console.print(
-        _terminal_safe(f"模型：{provider}/{cfg.model.model_id or '未设置'}    Key：{'PRESENT' if key_present else 'UNSET'}"),
+        _terminal_safe(f"模型：{provider}/{cfg.model.model_id or '未设置'}    Key：{key_status}"),
         markup=False,
     )
     console.print("输入 /help 查看命令；输入 /exit 或按 Ctrl-C 退出。\n")
@@ -901,6 +977,7 @@ def chat(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), fake:
     session_locked = False
     seen_actions: set[str] = set()
     pending_result: dict[str, Any] | None = None
+    progress_actions: set[str] = set()
     while True:
         try:
             message = typer.prompt("你").strip()
@@ -915,12 +992,16 @@ def chat(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), fake:
         if lowered == "/help":
             _chat_help()
             continue
-        if lowered == "/new":
+        if lowered in {"/new", "/clear"}:
             session_id = None
             session_locked = False
             pending_result = None
             seen_actions.clear()
-            console.print("已开始新会话。")
+            progress_actions.clear()
+            if lowered == "/clear":
+                console.print("已清除当前会话上下文，开始新会话。")
+            else:
+                console.print("已开始新会话。")
             continue
         if lowered == "/status":
             if session_id is None:
@@ -951,9 +1032,10 @@ def chat(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), fake:
                 "failed",
                 "waiting_approval",
             }:
+                progress_actions.clear()
                 pending_result = _reconcile_chat_session(root, candidate)
                 session_locked = True
-                _print_chat_result(pending_result, seen_actions)
+                _print_chat_result(pending_result, seen_actions, progress_actions)
                 console.print("该会话必须先完成只读核对，当前不会接受新的自然语言动作。")
         else:
             if session_locked:
@@ -961,13 +1043,16 @@ def chat(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), fake:
                 continue
             console.print("[dim]Aster 正在处理…[/dim]")
             try:
+                progress_actions.clear()
                 pending_result = _run_task_impl(
                     message,
                     root=root,
                     session_id=session_id,
                     fake=fake,
                     auto_approve=False,
-                    stream=False,
+                    stream=True,
+                    interactive_progress=True,
+                    progress_actions=progress_actions,
                     strict_workspace=True,
                 )
             except KeyboardInterrupt:
@@ -982,7 +1067,7 @@ def chat(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), fake:
             session_id = str(pending_result.get("session_id") or session_id or "") or None
             if isinstance(pending_result.get("reconcile"), Mapping):
                 session_locked = True
-            _print_chat_result(pending_result, seen_actions)
+            _print_chat_result(pending_result, seen_actions, progress_actions)
         while pending_result is not None and pending_result.get("status") == "waiting_approval":
             request = pending_result.get("approval_request")
             if not isinstance(request, Mapping) or session_id is None:
@@ -995,8 +1080,9 @@ def chat(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), fake:
                     markup=False,
                 )
                 break
+            progress_actions.clear()
             pending_result = _resume_chat_session(root, session_id, decision)
-            _print_chat_result(pending_result, seen_actions)
+            _print_chat_result(pending_result, seen_actions, progress_actions)
 
 
 @app.command()

@@ -102,6 +102,108 @@ _ANSWER_ONLY_GOAL = re.compile(
 )
 
 
+# Conversation entries are deliberately separate from tool evidence.  The
+# provider receives the latter in a structured, compact field, while this
+# list gives it the user-facing thread shape.  A model may emit several
+# assistant decisions during one turn (observe, edit, verify, ...), so a
+# plain ``conversation[-N:]`` truncation can silently discard every user
+# message after a long coding task.  Keep a bounded number of entries and
+# characters, with user turns taking priority over intermediate assistant
+# chatter.
+_CONVERSATION_MAX_MESSAGES = 16
+_CONVERSATION_MAX_CHARS = 16_384
+_CONVERSATION_ITEM_MAX_CHARS = 4_000
+
+
+def _compact_conversation(
+    conversation: Sequence[Mapping[str, Any]] | None,
+    *,
+    max_messages: int = _CONVERSATION_MAX_MESSAGES,
+    max_chars: int = _CONVERSATION_MAX_CHARS,
+) -> list[dict[str, str]]:
+    """Normalize and bound conversation history without losing user turns.
+
+    A single user request can produce many internal provider decisions.  We
+    therefore retain all user entries that fit, then use remaining slots for
+    the newest assistant entries.  Character budgeting gives user entries
+    first claim on space and then fills the remainder from the newest
+    assistant messages.  This is a context-management operation only: it
+    never grants authority and all text is redacted before it is returned.
+    """
+
+    if max_messages < 1 or max_chars < 1 or not conversation:
+        return []
+    normalized: list[dict[str, str]] = []
+    for raw in conversation:
+        if not isinstance(raw, Mapping):
+            continue
+        role = str(raw.get("role", ""))
+        if role not in {"user", "assistant"}:
+            continue
+        content = str(redact_secrets(str(raw.get("content", ""))))
+        if not content:
+            continue
+        normalized.append(
+            {
+                "role": role,
+                "content": content[:_CONVERSATION_ITEM_MAX_CHARS],
+            }
+        )
+    if not normalized:
+        return []
+
+    # Select every user turn while it fits the message bound.  If a corrupted
+    # or very old state contains more user turns than the bound, keep the
+    # newest ones so the active turn is never lost.
+    user_indices = [
+        index for index, item in enumerate(normalized) if item["role"] == "user"
+    ]
+    selected: set[int] = set(
+        user_indices
+        if len(user_indices) <= max_messages
+        else user_indices[-max_messages:]
+    )
+    for index in range(len(normalized) - 1, -1, -1):
+        if len(selected) >= max_messages:
+            break
+        selected.add(index)
+    ordered_indices = sorted(selected)
+
+    # Allocate the character budget to users first (split evenly when there
+    # are many user turns), then spend whatever remains on recent assistant
+    # entries.  This keeps the original request visible even when a turn
+    # generated a large amount of intermediate assistant text.
+    user_count = sum(normalized[index]["role"] == "user" for index in ordered_indices)
+    user_limit = max(1, max_chars // max(1, user_count))
+    content_by_index: dict[int, str] = {}
+    remaining = max_chars
+    for index in ordered_indices:
+        item = normalized[index]
+        if item["role"] != "user":
+            continue
+        value = item["content"][: min(len(item["content"]), user_limit, remaining)]
+        if value:
+            content_by_index[index] = value
+            remaining -= len(value)
+
+    for index in reversed(ordered_indices):
+        if remaining <= 0:
+            break
+        item = normalized[index]
+        if item["role"] != "assistant":
+            continue
+        value = item["content"][:remaining]
+        if value:
+            content_by_index[index] = value
+            remaining -= len(value)
+
+    return [
+        {"role": normalized[index]["role"], "content": content_by_index[index]}
+        for index in ordered_indices
+        if index in content_by_index
+    ]
+
+
 def _is_answer_only_goal(goal: str) -> bool:
     """Allow no-tool completion only for an explicit conversational shape."""
 
@@ -320,6 +422,21 @@ class AsterCodeOrchestrator:
             {"loop": "OBSERVE", "end": END},
         )
         return graph.compile(checkpointer=checkpointer, name="AsterCode")
+
+    @staticmethod
+    def compact_conversation(
+        conversation: Sequence[Mapping[str, Any]] | None,
+        *,
+        max_messages: int = _CONVERSATION_MAX_MESSAGES,
+        max_chars: int = _CONVERSATION_MAX_CHARS,
+    ) -> list[dict[str, str]]:
+        """Return bounded, redacted history suitable for a new model turn."""
+
+        return _compact_conversation(
+            conversation,
+            max_messages=max_messages,
+            max_chars=max_chars,
+        )
 
     @staticmethod
     def initial_state(
@@ -1002,7 +1119,7 @@ class AsterCodeOrchestrator:
             usage=usage.model_dump(mode="json"),
             plan=[str(redact_secrets(item)) for item in response.decision.plan],
             messages=messages,
-            conversation=conversation[-16:],
+            conversation=self.compact_conversation(conversation),
             provider_outcome=response.decision.outcome,
             provider_response_id=response.response_id,
             provider_events=merged_provider_events,
@@ -1370,6 +1487,17 @@ class AsterCodeOrchestrator:
                     now,
                 )
                 break
+            await self._emit(
+                {
+                    "event": "tool.started",
+                    "session_id": state["session_id"],
+                    "turn_id": state["turn_id"],
+                    "call_id": call.call_id,
+                    "action_id": call.action_id,
+                    "tool": call.tool,
+                    "attempt": attempts,
+                }
+            )
             try:
                 context = self._gateway_context(state, "TOOL_CALL").model_copy(update={"execution_timeout_seconds": execution_timeout})
                 raw = await asyncio.wait_for(
@@ -1393,6 +1521,19 @@ class AsterCodeOrchestrator:
                     f"tool gateway failed ({type(exc).__name__})",
                     now,
                 )
+            await self._emit(
+                {
+                    "event": "tool.completed",
+                    "session_id": state["session_id"],
+                    "turn_id": state["turn_id"],
+                    "call_id": call.call_id,
+                    "action_id": call.action_id,
+                    "tool": call.tool,
+                    "attempt": attempts,
+                    "status": result.status.value,
+                    "exit_code": result.exit_code,
+                }
+            )
             if not self._may_retry(state, call, result, attempts, remaining_attempts):
                 break
             retry_attempts[call.action_id] = attempts
@@ -1809,7 +1950,10 @@ class AsterCodeOrchestrator:
             "approval_summaries": approval_summaries,
             "blockers": state.get("blockers", []),
             "messages": state.get("messages", [])[-8:],
-            "conversation": state.get("conversation", [])[-16:],
+            "conversation": self.compact_conversation(
+                state.get("conversation", []),
+                max_chars=min(_CONVERSATION_MAX_CHARS, self.max_model_context_chars),
+            ),
             "tool_results": results,
             "budget": state.get("budget", {}),
             "usage": state.get("usage", {}),
@@ -1841,6 +1985,9 @@ class AsterCodeOrchestrator:
             "approval_request",
         }
         snapshot = {key: state.get(key) for key in sorted(allowed)}
+        snapshot["conversation"] = AsterCodeOrchestrator.compact_conversation(
+            state.get("conversation", [])
+        )
         raw_results = list(state.get("tool_results", []))
         compacted: list[dict[str, Any]] = []
         full_from = max(0, len(raw_results) - 8)

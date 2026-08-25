@@ -447,7 +447,13 @@ class Orchestrator:
         ):
             raw_conversation = stored_state.get("conversation", [])
             if isinstance(raw_conversation, list):
-                for item in raw_conversation[-14:]:
+                # The orchestrator owns bounded history selection.  Do not
+                # take a tail slice here: a long coding turn may contain many
+                # internal assistant decisions, and a raw tail can discard
+                # every prior user request before the next turn starts.
+                for item in AsterCodeOrchestrator.compact_conversation(
+                    raw_conversation
+                ):
                     if not isinstance(item, Mapping):
                         continue
                     role = str(item.get("role", ""))
@@ -462,7 +468,9 @@ class Orchestrator:
         # as continuing authorization. Users can explicitly restate the task
         # (or start /new) if they genuinely want to try again.
         conversation.append({"role": "user", "content": safe_goal[:4_000]})
-        state["conversation"] = conversation[-15:]
+        state["conversation"] = AsterCodeOrchestrator.compact_conversation(
+            conversation
+        )
         # Persist a useful in-flight state before the first provider request.
         # Without this, a long reasoning call appears permanently "created"
         # to `status` even though the agent is actively running.
