@@ -1,6 +1,8 @@
 # AsterCode 实施计划与当前基线
 
-本文件把“代码已存在”“离线 fake 已验证”和“真实 live 未验证”分开。没有 API key 时仍可推进离线部分；真实 Provider 不是后续本地安全工作的前置条件。仓库当前 `config.toml` 有意保留旧格式用于迁移兼容验证；`config migrate` 的预览/写入能力已实现，但本次文档同步不替换该用户配置文件。
+新电脑或新 AI 编程代理应先阅读仓库根目录的 [`HANDOFF.md`](../HANDOFF.md)。本文件保留详细里程碑边界；HANDOFF 提供接手顺序、最小质量门和下一任务入口。
+
+本文件把“代码已存在”“离线 fake 已验证”和“真实 live 未验证”分开。没有 API key 时仍可推进离线部分；真实 Provider 不是后续本地安全工作的前置条件。旧格式配置迁移由自动化 fixture 覆盖；任何被 Git 忽略的本地 `config.toml` 都不属于源码或交接物，clean clone 不包含它。`config migrate` 的预览/写入能力已实现，但不会替用户迁移机器本地配置。
 
 ## 当前状态总览
 
@@ -13,7 +15,7 @@
 | M4 Memory/Recovery | partial but usable | SQLite WAL/FTS5、schema v8 migrations/backups、三层 memory、edit/conflict/supersedes、字段保留型 checkpoint compaction、跨进程审批恢复、process registry/read-only reconcile、Docker backend identity、stream/replay；所有写入前 schema preflight 拒绝 future/gap/伪造版本、缺表列和非 FTS5；POSIX zombie 不再误报为可恢复进程 | 任意外部副作用的自动回滚、远程 reconcile、跨重启 POSIX 进程组回收的 live 证明 |
 | M5 SSH/SFTP | transport slice, live blocked | Fake SSH 全契约；默认关闭的系统 OpenSSH 命令通道；固定系统路径和结构化 argv；严格专用 known_hosts 与派生指纹一致性；agent/keychain-only；禁用密码、代理、转发、X11、复用；allowlist/网络证明双门槛；远端停止 unknown | 可信 SSH egress allowlist、首次指纹登记、真实主机、SFTP、远程 PID、备份/原子替换/回滚和现场验证 |
 | M6 Browser/MCP/Plugin/Subagent/GUI | offline complete, engine slice verified | Fake Browser/MCP/Plugin；可选 Playwright + Edge 非持久化只读 context；每请求 allowlist/DNS/重定向检查；`about:blank` 零页面网络 smoke；Draft 2020-12 严格 schema；只读子代理双开关、原子父子预算 reservation/usage 合并、跨重启全额保守恢复、grant/parent/all 定向取消 | 浏览器 OS egress、外网导航/下载/提交仍 blocked；子代理仍同进程且 live delegation blocked；真实 MCP/plugin 隔离、GUI、生产调度 |
-| M7 跨平台/发布 | partial, resume-demo ready | wheel、安装 smoke、README、配置和迁移备份、审计 verify、回归 fixture、Git Bash 兼容 smoke、本地性能基线；真实 Windows Ctrl-Break、审批恢复取消、宿主崩溃 Job 清理均已回归；WSL2 Ubuntu 中 Python 3.12、bash、Docker Desktop Linux engine 与全量测试通过；提交 `0ff88d3` 的 GitHub Actions Windows/Ubuntu jobs 通过；新增固定简历演示入口和发布清单 | 当前工作树最终回归与版本证据刷新、裸机 Linux/独立 daemon、更多 live 集成矩阵 |
+| M7 跨平台/发布 | partial, resume-demo ready | wheel、安装 smoke、README、配置和迁移备份、审计 verify、回归 fixture、Git Bash 兼容 smoke、本地性能基线；真实 Windows Ctrl-Break、审批恢复取消、宿主崩溃 Job 清理均已回归；WSL2 Ubuntu 中 Python 3.12、bash、Docker Desktop Linux engine 与全量测试通过；提交 `2d3d13a` 的 GitHub Actions Windows/Ubuntu jobs 通过；新增固定简历演示和 AI 接手入口 | 本交接候选对应远端 CI、裸机 Linux/独立 daemon、更多 live 集成矩阵 |
 
 ## 已完成的离线垂直链路
 
@@ -60,7 +62,7 @@
 - 用量：148,994 tokens（输入与输出合计）；成本尚未从 DeepSeek 账单核对。
 - 耗时：约 4 分 28 秒。
 - 未覆盖：文件写入、Shell/Git 副作用、审批恢复、真实 SSH、浏览器、OpenAI Provider、长任务和错误重试。
-- 发现：流式事件分片过细导致审计写放大，重复上下文造成 Token 使用过高；运行后 `astercode audit verify` 曾报 JSONL/SQLite 少一条记录。随后已完成 delta batching、context compaction、`status=running` 生命周期同步和审计镜像修复；`uv run astercode audit repair --root . --confirm` 追加 1 条 `audit.mirror_repaired` 后，当时 `audit verify` 实测 `valid=true, entries=2693`。这些是已修复并回归的历史问题；当前工作区快照再次核对为 `valid=true, entries=2741`（head `a4436347...`），记录数会随正常运行增长，smoke 仍不代表完整 live 或性能通过。
+- 发现：流式事件分片过细导致审计写放大，重复上下文造成 Token 使用过高；运行后 `astercode audit verify` 曾报 JSONL/SQLite 少一条记录。随后已完成 delta batching、context compaction、`status=running` 生命周期同步和审计镜像修复；`uv run astercode audit repair --root . --confirm` 追加 1 条 `audit.mirror_repaired` 后，当时 `audit verify` 实测 `valid=true, entries=2693`，旧开发电脑后来又核对过 `entries=2741`（当时 head `a4436347...`）。这些只是历史快照，不会迁移到 clean clone，也不代表完整 live 或性能通过。
 
 修复后又在同一主机完成了第二次低预算、窄范围只读 smoke：
 
@@ -84,7 +86,7 @@
 - 将 Fake SSH/Browser/MCP/Plugin/Subagent 测试纳入固定 CI 命令；所有 fixture 保证无网络和无秘密。
 - 配置迁移、memory conflict/poisoning、audit tamper detection 的主要文档与回归已完成；后续仅维护迁移兼容性和更多损坏数据库 fixture。
 - WSL2 Ubuntu 已用独立 Linux venv 跑通全量 `pytest`，其中包含 6 项真实 Docker/bash 沙箱测试；这证明 WSL Ubuntu + Docker Desktop Linux engine 组合，不等同于裸机 Linux、独立生产 daemon 或通用网络出口验收。
-- GitHub Actions Ubuntu job 已配置固定摘要镜像拉取和强制 live Docker 回归；`ASTERCODE_REQUIRE_LIVE_DOCKER=1` 会把缺失 attestation 从 skip 提升为失败。首次运行暴露的 Ubuntu `CTRL_BREAK_EVENT` mypy 回归已修复；提交 `0ff88d3` 的远端 Windows/Ubuntu jobs 已通过。后续提交必须重新等待对应 workflow 结论，不能沿用该提交的证据。
+- GitHub Actions Ubuntu job 已配置固定摘要镜像拉取和强制 live Docker 回归；`ASTERCODE_REQUIRE_LIVE_DOCKER=1` 会把缺失 attestation 从 skip 提升为失败。首次运行暴露的 Ubuntu `CTRL_BREAK_EVENT` mypy 回归已修复；提交 `2d3d13a` 的远端 Windows/Ubuntu jobs 已通过。后续提交必须重新等待对应 workflow 结论，不能沿用该提交的证据。
 
 ### B. 具备独立安全证据后再做 live adapter
 
@@ -98,7 +100,7 @@
 
 ## 每次阶段验收命令
 
-提交 `0ff88d3` 的远端 GitHub Actions Windows/Ubuntu jobs 已通过。2026-08-25 当前本地发布候选已刷新为 Windows 11 `431 passed, 5 skipped`、WSL2 Ubuntu `417 passed, 19 skipped`，并在 WSL 以强制 live 条件确认 Docker 回归 `6 passed`；每个候选提交仍以其对应的远端 CI 结果为最终依据。skip 继续表示未满足的平台/权限或 live 条件，不计入已完成能力。现场 DeepSeek sessions 是有限范围的兼容性证据，不替代 deterministic Demo 或完整回归。
+提交 `2d3d13a` 的远端 GitHub Actions Windows/Ubuntu jobs 已通过。2026-08-25 本地交接候选已刷新为 Windows 11 `441 passed, 5 skipped`、WSL2 Ubuntu `426 passed, 20 skipped`，并在 WSL 以强制 live 条件确认 Docker 回归 `6 passed`；每个候选提交仍以其对应的远端 CI 结果为最终依据。skip 继续表示未满足的平台/权限或 live 条件，不计入已完成能力。现场 DeepSeek sessions 是有限范围的兼容性证据，不替代 deterministic Demo 或完整回归。
 
 ```powershell
 uv run astercode doctor --root .
@@ -118,6 +120,6 @@ uv run python scripts/resume_demo.py --backend docker --cleanup
 
 ## 暂不做的事情
 
-2026-08-25 当前本地发布候选：Windows 11 全量为 `431 passed, 5 skipped`；WSL2 Ubuntu 全量为 `417 passed, 19 skipped`，并单独设置 `ASTERCODE_REQUIRE_LIVE_DOCKER=1` 确认 6 项真实 Docker 沙箱测试全部通过。两边的 skip 均是平台或显式 live 条件，不计为能力通过。`ruff check .`、`mypy src tests`、`uv lock --check`、wheel/sdist 构建和隔离环境 packaged CLI smoke 同时通过；真实 DeepSeek 同会话 7 turn、6 次精确审批、两轮文件 create/modify/delete 回归也已通过。
+2026-08-25 本地交接候选：Windows 11 全量为 `441 passed, 5 skipped`；WSL2 Ubuntu 全量为 `426 passed, 20 skipped`，并单独设置 `ASTERCODE_REQUIRE_LIVE_DOCKER=1` 确认 6 项真实 Docker 沙箱测试全部通过。两边的 skip 均是平台或显式 live 条件，不计为能力通过。`ruff check .`、`mypy src tests`、`uv lock --check`、wheel/sdist 构建和隔离环境 packaged CLI smoke 同时通过，Windows 固定 Docker Demo 也通过；真实 DeepSeek 同会话 7 turn、6 次精确审批、两轮文件 create/modify/delete 是此前的有限 live 回归。
 
 不自动 commit、push、发布、部署、连接生产主机或索取私钥/API key；不通过关闭安全策略来“解锁”未完成能力。任何 required-path 能力若没有可强制执行的宿主边界，就保持 `BLOCKED`。

@@ -1,5 +1,7 @@
 # AsterCode 安全示例配置（UTF-8）。这里不保存 API key、密码、私钥或审批凭证。
 # 复制为项目根目录的 astercode.toml 后，再按需调整非秘密设置。
+# 换电脑时不要复制公司实际配置；在个人电脑从本示例重新创建，并重新审查
+# authorized_roots、网络/SSH allowlist、下载目录和任何主机/路径是否适合公开项目。
 
 config_version = 1
 product_name = "AsterCode"
@@ -11,7 +13,8 @@ execution_mode = "inspect_then_implement"
 provider = "deepseek"
 # 公共 CLI 不接受项目文件替用户开启 live Provider；同时设置用户环境
 # ASTERCODE_MODEL_PROVIDER=deepseek 和 ASTERCODE_MODEL_ID。
-# 不要把 key 写入本文件；这里只保存环境变量名。
+# 不要把 key 写入本文件；这里只保存环境变量名。获授权的 key 应由 Read-Host
+# -AsSecureString 或个人 secret broker 注入当前进程，不持久化为 User 环境变量。
 api_key_env = "DEEPSEEK_API_KEY"
 # DeepSeek Chat Completions 只允许官方 HTTPS 根地址；运行时会再次固定并验证。
 base_url = "https://api.deepseek.com"
@@ -48,8 +51,10 @@ multi_agent = false
 
 [security]
 network_mode = "deny_by_default"
+# 迁移到个人电脑时保持空列表；不要从公司配置复制内网域名、IP 或目的地。
 network_allowlist = []
 authorized_roots = ["."]
+# 不复制公司主机、用户名、指纹、known_hosts 或 SSH 私钥。
 authorized_ssh_hosts = []
 reject_unc_paths = true
 approval_ttl_seconds = 600

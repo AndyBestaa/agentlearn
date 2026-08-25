@@ -6,6 +6,8 @@
 
 ### Added
 
+- 新增根目录 `HANDOFF.md` 作为跨电脑和跨 AI 编程代理的统一接手入口：记录 M0-M7 快照、必读顺序、无真实 key 质量门、推荐后续任务和可复制的启动指令，使后续开发不依赖当前 Codex 对话历史。
+- 新增公司 Windows 到个人 Windows 的安全迁移指南与 portable source/demo 预检命令：先确认知识产权和保密授权，只通过公开 Git clean clone 迁移源码，不复制 `.astercode`、本地配置、环境文件、虚拟环境、SSH/浏览器凭据或审计状态；离职后仍获授权的 Provider key 由隐藏输入重新注入当前会话，只持久化 Provider/模型选择。
 - Windows PowerShell 7 发现不再信任 PATH、`ProgramFiles` 或 `SystemRoot` 环境覆盖：宿主通过 Windows known-folder API 取得系统目录，支持固定 MSI 路径和经包名/版本/架构/发布者/reparse 校验的 Microsoft Store 安装；本机 Store 版 `pwsh` 的 NoProfile/UTF-8 smoke 已真实执行。
 - 新增固定作品集演示入口 `scripts/resume_demo.py` 与 `examples/resume_demo/`：从故障基线开始，串联读取、最小 patch、精确 P3 审批/checkpoint resume、Docker 测试、Git diff/status 和审计链核验。默认 Docker backend 必须使用真实 attestation；`--backend fake` 在证据和终端中明确标记 simulated，不声称启动了进程或沙箱。最终发布通过状态仍以目标提交实际运行结果为准。
 - README 首屏增加 CI 状态、核心能力、固定演示命令、架构图和 commit-scoped verified/blocked 边界；新增演示指南、简历项目说明与发布检查清单。
@@ -53,7 +55,7 @@
 - 2026-08-23 第二次 DeepSeek 低预算只读 smoke：session `session_379c1fc09344409abb34c488d87a0bf3` 为 `completed`，严格按要求只读取 README 前 30 行且不递归；预算为 3 轮、2 次工具、20,000 总/16,000 输入/4,000 输出 tokens 和 180 秒，实际为 2 轮、1 次 P0 `fs.read`、12,601 输入/1,035 输出（共 13,636）tokens、约 12.2 秒、无审批，成本字段为 `null`。它比第一次窄且低很多，但两次任务范围不同，不构成受控性能基准，也不覆盖其他 live 能力。
 - 2026-08-23 第三次 DeepSeek 低预算只读 smoke：session `session_01990918f5774f83aca1bffe08f3d529` 为 `completed`，只读取 README 前 10 行并用一句话总结；实际 2 轮、1 次 P0 `fs.read`、12,547 输入/1,214 输出（共 13,761）tokens、约 12.3 秒、无审批、成本字段为 `null`。`test_status` 只有一条对应记录，未复现此前的重复项。
 - 修复该 smoke 暴露的重复验证记录：无新工具的最终模型轮次不再重复验证上一轮结果；`test_status` 以 `call_id` 幂等，任务完成证据也必须绑定最新工具调用。历史 session 的已写快照保持不变。
-- smoke 后修复了过细流式分片的审计写放大（delta batching）、重复上下文（context compaction）和 `status=running` 生命周期同步问题。针对历史上少一条 JSONL/SQLite 记录，执行 `audit repair --confirm` 追加 1 条 `audit.mirror_repaired`，当时 `audit verify` 实测 `valid=true, entries=2693`；当前工作区快照核对为 `valid=true, entries=2741`，记录数会随正常运行增长。修复已完成并通过本地回归，不扩展为其他 live 能力完成。
+- smoke 后修复了过细流式分片的审计写放大（delta batching）、重复上下文（context compaction）和 `status=running` 生命周期同步问题。针对历史上少一条 JSONL/SQLite 记录，执行 `audit repair --confirm` 追加 1 条 `audit.mirror_repaired`，当时 `audit verify` 实测 `valid=true, entries=2693`；旧开发电脑后来核对为 `entries=2741`。这些机器本地记录不迁移到 clean clone；修复已完成并通过本地回归，不扩展为其他 live 能力完成。
 - Windows Job Object 进程树约束：目标进程用 `CREATE_SUSPENDED` 创建，成功 `AssignProcessToJobObject` 后才恢复；Job 启用 `KILL_ON_JOB_CLOSE`、树级 active-process、job-memory 和累计 user-mode CPU-time limit。本机父子树 Job close/`process.stop`、进程数/内存/CPU 限额与模拟分配失败 marker 测试已通过。该能力仅约束进程树生命周期/资源，不提供文件系统或网络沙箱。
 - 进程输出和句柄可靠性：相同命令的每次启动使用独立 `proc_...` 生命周期句柄；stdout/stderr 由有界后台 capture 持续排空，记录 observed/retained/truncated/complete，超时、停止和后代持有管道的路径均使用有限等待。
 - run 使用有限默认预算（40 rounds、100 tool calls、120,000 total tokens、100,000 input tokens、20,000 output tokens、3,600 秒），并支持 `--max-rounds`、`--max-tool-calls`、`--max-tokens`、`--max-input-tokens`、`--max-output-tokens` 和 `--max-elapsed-seconds` 的单次覆盖。
@@ -62,6 +64,7 @@
 
 ### Fixed
 
+- 修复跨机器开发时暴露的两处隐性环境耦合：审批终端单测显式使用 Fake Provider，不再取决于宿主是否配置真实 key；Windows 清洁进程环境从系统 API 获取 `SystemRoot`、`ProgramFiles` 和 `ProgramData`，固定 PowerShell 包查询的系统 cwd，并拒绝非本地系统盘，避免缺失 `%SystemDrive%` 展开时把 AppX 缓存写进工作区。
 - 对话终端将 `partial`/`blocked` 等内部状态显示为带原始枚举的中文含义，工具闭环完成时显示明确成功标记；`/status` 改为目标、预算、用量、下一步和阻塞原因的紧凑摘要，同时保留完整 JSON 查询命令。固定 Demo 只复制四个明确允许的 fixture 文件，不再被正常生成的 `__pycache__` 干扰。
 - 修复 Ubuntu GitHub Actions 的跨平台 mypy 回归：Windows 专属 `signal.CTRL_BREAK_EVENT` 现在通过受保护的运行时属性读取，POSIX 类型检查不再失败；本地 Windows 与 WSL 定向测试、Ruff 和 mypy 均通过。
 - 修复普通非 Git 新目录中 `git.status` 失败会提前结束任务的问题：无副作用、幂等只读失败现在作为有预算上限的观察反馈给模型；本地模型虚拟 cwd 标记由宿主安全绑定到唯一授权工作区，任意其他越界绝对路径仍拒绝。`fs.apply_patch` 仅在原上下文失败且去除单一展示分隔空格后能精确匹配当前文件时规范化 `- old`/`+ new`；已成功写入后的陈旧重复补丁在执行前被策略拒绝、无审批且无副作用，并可由模型继续完成回合。真实同会话双循环与确定性回归均覆盖这些路径。
@@ -80,7 +83,7 @@
 - Git executor 拒绝仓库级 `include/includeIf` 配置，强制禁用 hooks、外部 diff、commit/tag GPG signing、credential helper 和 askpass；恶意仓库 signing 配置回归通过。
 - Git P0 查询进一步拒绝 filter/diff/merge 外部驱动、fsmonitor 和外部 attributes/excludes 配置，设置 `GIT_NO_LAZY_FETCH=1` 并对 diff/show 禁用 external diff/textconv；通用 process/shell 也拒绝绕过受控 Git、SSH、network 和 delete 路径。
 - 修复首次公开 CI 暴露的跨平台差异：Linux mypy 通过运行时检查访问 Windows-only API 并保持 fail-closed；Windows 8.3 临时目录别名改用文件身份比较；GitHub Actions 升级到 Node 24 action 版本。
-- 2026-08-25 当前本地发布候选全量回归：Windows 11 `431 passed, 5 skipped`，WSL2 Ubuntu `417 passed, 19 skipped`，WSL 强制 live Docker 回归 `6 passed`；两端 `ruff check .`、`mypy src tests`、`uv lock --check`、wheel/sdist 构建和隔离环境 packaged CLI smoke 通过。历史本机 Edge 离线 smoke 另为 `1 passed, 5 deselected`；skip 不视为能力通过，每个候选提交仍以其对应的远端 CI 结果为最终依据。
+- 2026-08-25 本地交接候选全量回归：Windows 11 `441 passed, 5 skipped`，WSL2 Ubuntu `426 passed, 20 skipped`，WSL 强制 live Docker 回归 `6 passed`；两端 `ruff check .`、`mypy src tests`、`uv lock --check`、wheel/sdist 构建和隔离环境 packaged CLI smoke 通过，Windows 固定 Docker Demo 输出 `AsterCode resume demo: PASS`。历史本机 Edge 离线 smoke 另为 `1 passed, 5 deselected`；skip 不视为能力通过，每个候选提交仍以其对应的远端 CI 结果为最终依据。
 
 ### Not verified / still blocked
 

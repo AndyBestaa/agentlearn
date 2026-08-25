@@ -2,6 +2,8 @@
 
 本指南对应“可以写在简历上并现场演示的本地编程 Agent”目标。主演示是确定性、无凭据、可核验的本地闭环；真实 DeepSeek 对话仅作为可选加演，不是主演示成功的前提。
 
+若刚从另一台电脑迁移，请只从获批的公开 Git 仓库 clean clone，不复制 `.astercode/`、配置、`.env`、虚拟环境、SSH 文件或审计记录。完整流程见 [Windows 安全迁移指南](windows-migration.md)。
+
 ## 主演示：故障诊断到验证证据
 
 ### 前置条件
@@ -16,7 +18,10 @@
 cd C:\path\to\langgraph-agent
 uv sync --extra dev
 uv run astercode doctor --root .
+python scripts/portability_preflight.py --root . --profile demo
 ```
+
+`demo` profile 可追加 `--format json` 输出机器可读检查结果。它和 doctor 都必须在当前个人电脑重新运行；公司电脑或旧提交的结果不能作为新环境的沙箱证据。
 
 然后运行唯一的固定入口：
 
@@ -86,7 +91,7 @@ aster
 检查这个 calculator 项目，定位现有回归，做最小修复，运行最相关的测试并总结精确 diff。不要联网，不要 commit 或 push。
 ```
 
-这一路径会使用当前终端显式配置的 Provider，并可能产生费用。不要把 API key 输入对话或写入项目；审批时逐项核对工具、路径、argv、cwd 和补丁。真实模型可能选择不同的安全步骤，因此它用于展示交互能力，不替代固定主演示的可复现验收。
+这一路径会使用当前终端显式配置的 Provider，并可能产生费用。个人 key 应通过 `Read-Host -AsSecureString` 或个人 secret broker 注入当前进程；不要把 API key 输入对话、写入项目或作为明文命令进入历史。审批时逐项核对工具、路径、argv、cwd 和补丁。真实模型可能选择不同的安全步骤，因此它用于展示交互能力，不替代固定主演示的可复现验收。
 
 ## Fake fallback 的边界
 

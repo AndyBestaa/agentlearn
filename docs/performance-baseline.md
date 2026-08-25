@@ -38,7 +38,7 @@ uv run python scripts/performance_smoke.py
 
 第二次运行的预算为最多 3 轮、2 次工具调用、20,000 总 tokens、16,000 输入 tokens、4,000 输出 tokens 和 180 秒。任务明确限制为只读取 README 前 30 行、用三句话总结且不递归；运行实际遵守该边界，仅执行 P0 读取，无审批和副作用。第三次使用同样窄的 3 轮/2 工具预算，只读取 README 前 10 行并输出一句话；同样只有一次 P0 读取，且 `test_status` 只有一条对应记录。
 
-第一次任务只读取 README 和项目结构，没有文件写入、Shell/Git 副作用、SSH、浏览器或外部提交。它曾暴露重复上下文和过细流式分片造成的高 Token 使用与审计写放大；运行结束后 `astercode audit verify` 还发现 JSONL/SQLite 少一条记录。随后已完成 delta batching、context compaction、`status=running` 生命周期同步和审计镜像修复：`audit repair --confirm` 追加 1 条 `audit.mirror_repaired` 后，当时 `audit verify` 实测 `valid=true, entries=2693`。当前工作区快照（2026-08-23）再次核对为 `valid=true, entries=2707`，这只是随运行增长的记录数，不是性能基线。
+第一次任务只读取 README 和项目结构，没有文件写入、Shell/Git 副作用、SSH、浏览器或外部提交。它曾暴露重复上下文和过细流式分片造成的高 Token 使用与审计写放大；运行结束后 `astercode audit verify` 还发现 JSONL/SQLite 少一条记录。随后已完成 delta batching、context compaction、`status=running` 生命周期同步和审计镜像修复：`audit repair --confirm` 追加 1 条 `audit.mirror_repaired` 后，当时 `audit verify` 实测 `valid=true, entries=2693`。旧开发电脑在 2026-08-23 又核对过 `entries=2707`；这只是历史机器随运行增长的记录数，不会迁移到 clean clone，也不是性能基线。
 
 配置迁移和数据库 schema preflight 的安全检查未纳入上述性能数字：它们在任何写入前执行，只读拒绝 future/gap/伪造 schema、缺列或非 FTS5；配置写入还包含逐字节备份、冲突检测和原子替换，需要后续单独建立带磁盘/SQLite 版本矩阵的基准。
 

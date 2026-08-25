@@ -208,19 +208,56 @@ def test_discovers_a_validated_store_powershell_install(tmp_path: Path, monkeypa
     inbox = system_root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
     inbox.parent.mkdir(parents=True)
     inbox.write_bytes(b"test")
+    program_data = tmp_path / "ProgramData"
+    program_data.mkdir()
     monkeypatch.setattr(
         process_module,
         "_windows_system_locations",
-        lambda: (program_files, system_root),
+        lambda: (program_files, system_root, program_data),
     )
 
+    captured_env: dict[str, str] = {}
+    captured_cwd: list[str] = []
+
     def fake_run(*args, **kwargs):
-        del args, kwargs
+        del args
+        captured_env.update(kwargs["env"])
+        captured_cwd.append(kwargs["cwd"])
         return subprocess.CompletedProcess([], 0, f"{package}\n", "")
 
     monkeypatch.setattr(process_module.subprocess, "run", fake_run)
 
     assert discover_trusted_powershell7() == executable.resolve()
+    assert captured_env["SystemDrive"].casefold() == system_root.drive.casefold()
+    assert Path(captured_env["ProgramData"]) == program_data
+    assert "%SystemDrive%" not in captured_env["ProgramData"]
+    assert Path(captured_env["ProgramFiles"]) == program_files
+    assert captured_cwd == [str(inbox.parent.resolve())]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows clean environment is Windows-specific")
+def test_clean_env_uses_os_resolved_windows_paths(tmp_path: Path, monkeypatch) -> None:
+    program_files = tmp_path / "Program Files"
+    program_files.mkdir()
+    system_root = tmp_path / "Windows"
+    system_root.mkdir()
+    program_data = tmp_path / "ProgramData"
+    program_data.mkdir()
+    monkeypatch.setattr(
+        process_module,
+        "_windows_system_locations",
+        lambda: (program_files, system_root, program_data),
+    )
+    monkeypatch.setenv("SystemDrive", "%SystemDrive%")
+    monkeypatch.setenv("ProgramData", r"%SystemDrive%\ProgramData")
+    monkeypatch.setenv("ProgramFiles", str(tmp_path / "untrusted-program-files"))
+
+    env = ProcessTools([tmp_path])._clean_env({})
+
+    assert env["SystemDrive"].casefold() == system_root.drive.casefold()
+    assert Path(env["ProgramData"]) == program_data
+    assert Path(env["ProgramFiles"]) == program_files
+    assert "%SystemDrive%" not in env["ProgramData"]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows known folders are Windows-specific")
@@ -235,8 +272,10 @@ def test_windows_system_locations_ignore_inherited_path_overrides(
     locations = _windows_system_locations()
 
     assert locations is not None
-    program_files, windows = locations
+    program_files, windows, program_data = locations
     assert tmp_path not in program_files.parents
     assert tmp_path not in windows.parents
+    assert tmp_path not in program_data.parents
     assert program_files.is_dir()
     assert windows.is_dir()
+    assert program_data.is_dir()

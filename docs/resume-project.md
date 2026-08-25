@@ -13,7 +13,7 @@ AsterCode 是一个基于 LangGraph 的 local-first 编程 Agent：通过结构�
 - 设计 `OBSERVE → PLAN → POLICY_CHECK → APPROVAL_GATE → TOOL_CALL → CAPTURE → VERIFY → CHECKPOINT` 状态机，将模型限制为结构化工具 proposal；宿主按真实路径和副作用执行 P0-P4 风险重判，审批绑定 action hash、cwd、diff、TTL 与一次性 nonce。
 - 实现授权根内文件/Git 工具、原子 patch、秘密脱敏、工具前后 checkpoint、跨进程 resume、kill switch 与哈希链审计；使用 SQLite WAL/FTS5 管理 session、审批、三层记忆、artifact 和进程身份。
 - 构建 Docker 本地执行边界：固定镜像 RepoDigest、只读宿主源码、临时可写副本、`--network none`、非 root、capabilities 清零及 CPU/memory/PID/tmpfs 限额；测试结果、退出码和 Git diff 作为完成证据。
-- 建立 deterministic Fake/replay 与跨平台回归体系；2026-08-25 本地发布候选在 Windows 11 为 `431 passed, 5 skipped`、WSL2 Ubuntu 为 `417 passed, 19 skipped`，WSL 强制 live Docker 为 `6 passed`，并通过 Ruff、mypy、lock、构建和 packaged CLI smoke；提交 `0ff88d3` 的 GitHub Actions Windows/Ubuntu jobs 已通过，并以每个候选提交对应的远端 CI 结果作为最终证据。
+- 建立 deterministic Fake/replay 与跨平台回归体系；2026-08-25 本地交接候选在 Windows 11 为 `441 passed, 5 skipped`、WSL2 Ubuntu 为 `426 passed, 20 skipped`，WSL 强制 live Docker 为 `6 passed`，并通过 Ruff、mypy、lock、构建、packaged CLI smoke 和固定 Docker Demo；提交 `2d3d13a` 的 GitHub Actions Windows/Ubuntu jobs 已通过，每个新候选仍以自身远端 CI 为最终证据。
 
 ## 30 秒口头介绍
 
@@ -69,4 +69,4 @@ uv run python scripts/resume_demo.py --backend docker --cleanup
 - Built a local-first coding agent with LangGraph and schema-validated function calls; enforced P0-P4 policy decisions and hash-bound, single-use approvals in the host runtime instead of relying on prompts.
 - Implemented workspace-scoped filesystem/Git tools, atomic patches, SQLite-backed checkpoints and memory, crash-safe resume, kill switch, redaction, and hash-chained audit evidence.
 - Added an attested Docker execution slice with a pinned image digest, read-only host source, ephemeral writable workspace, no network, non-root execution, dropped capabilities, and resource limits.
-- Developed deterministic replay/fake providers and cross-platform regression coverage; the 2026-08-25 local candidate passed 431 Windows tests, 417 WSL tests, and 6 required live-Docker checks, while commit `0ff88d3` passed Windows/Ubuntu GitHub Actions. The candidate CI is revalidated after push.
+- Developed deterministic replay/fake providers and cross-platform regression coverage; the 2026-08-25 handoff candidate passed 441 Windows tests, 426 WSL tests, and 6 required live-Docker checks, plus lint, typing, locked builds, packaged CLI smoke, and the fixed Docker demo. Commit `2d3d13a` passed Windows/Ubuntu GitHub Actions; every new candidate is revalidated after push.

@@ -46,13 +46,15 @@ flowchart LR
 
 | 范围 | 证据 | 不能外推为 |
 | --- | --- | --- |
-| 2026-08-25 本地发布候选 | Windows 11 `431 passed, 5 skipped`；WSL2 Ubuntu `417 passed, 19 skipped`；WSL 强制 live Docker `6 passed`；两端 Ruff、mypy、lock、构建和 packaged CLI smoke 通过 | 该候选提交对应的远端 CI 结果；裸机 Linux/独立 Docker daemon |
-| 提交 `0ff88d3` | GitHub Actions 的 Windows/Ubuntu jobs 已通过 | 当前候选工作树的远端 CI 结果 |
+| 2026-08-25 本地交接候选 | Windows 11 `441 passed, 5 skipped`；WSL2 Ubuntu `426 passed, 20 skipped`；WSL 强制 live Docker `6 passed`；两端 Ruff、mypy、lock、构建和 packaged CLI smoke 通过 | 该候选提交对应的远端 CI 结果；裸机 Linux/独立 Docker daemon |
+| 提交 `2d3d13a` | GitHub Actions [run 32809812744](https://github.com/AndyBestaa/agentlearn/actions/runs/32809812744) 的 Windows/Ubuntu jobs 已通过 | 本交接候选推送后的 CI 结果 |
 | Docker 本地执行切片 | 固定 RepoDigest、只读宿主源码、临时副本、无网络、非 root、capabilities 清零、资源限制与受控产物导出已有自动化验证 | 浏览器、SSH 或宿主进程的通用网络沙箱 |
 | DeepSeek 现场 smoke | 有范围有限的只读、文件增删改和 Docker 执行 session 证据 | 所有模型/账户、成本、长任务、真实 SSH 或生产部署 |
 | Fake SSH/Browser/MCP/Plugin | deterministic 自动化测试 | 真实远程主机、外网浏览器或生产插件隔离 |
 
 发布前必须按 [docs/release-checklist.md](docs/release-checklist.md) 在目标提交重新刷新测试数字。真实 OpenAI、SSH、浏览器外网、GUI 和插件进程隔离继续标记为 `LIVE INTEGRATION NOT VERIFIED` 或 `BLOCKED`。
+
+换电脑或交给另一位 AI 编程代理继续开发时，从根目录的 [HANDOFF.md](HANDOFF.md) 开始；其中记录了必读顺序、M0-M7 快照、无需真实 key 的质量门、后续优先级和可直接复制给下一代理的启动指令，不依赖当前 Codex 对话历史。
 
 ## 安装与首次启动
 
@@ -78,13 +80,31 @@ uv run astercode doctor --root .
 
 本机 process/shell 还要求 WSL2、Docker Desktop Linux engine 和已固定的 Python 镜像。`astercode doctor` 只有在镜像摘要、只读源码、临时副本写入不回传、隐藏状态目录和 `--network none` 主动探测全部通过后才显示 `sandbox/network enforcement = ENFORCED`；否则继续 fail-closed。
 
+### 从公司 Windows 电脑迁移到个人电脑
+
+先确认公司知识产权、保密和设备管理政策明确允许公开该源码；工具检查不能代替授权。迁移只通过已审查的公开 Git 仓库进行，不复制整个工作目录、压缩包或用户配置。`.astercode/`、`config.toml`、`.env`、`.venv/`、SSH/浏览器凭据、审计/session/记忆和公司内部路径、主机或数据都不得带到个人电脑。
+
+在公司电脑的干净提交上运行源码交接预检：
+
+```powershell
+python scripts/portability_preflight.py --root . --profile source
+```
+
+个人电脑从公开仓库 clean clone 后重新安装、初始化并运行完整 Demo 预检：
+
+```powershell
+python scripts/portability_preflight.py --root . --profile demo
+```
+
+开发期间可用 `--allow-dirty` 查看未提交工作树的诊断，但它不是可公开迁移的通过凭证；自动化取证可追加 `--format json`。个人电脑只使用离职后仍明确获准使用的 Provider key，并以隐藏输入注入当前终端；key 不进入 Git。完整跨电脑步骤见 [Windows 安全迁移指南](docs/windows-migration.md)，下一 AI 编程代理的开发入口见 [HANDOFF.md](HANDOFF.md)。
+
 ### 在任意 VS Code 项目中直接输入 `aster`
 
 开发阶段可以把当前源码安装成全局可执行命令；`--editable` 会让后续源码修改立即生效：
 
 ```powershell
 cd C:\path\to\langgraph-agent
-uv tool install --editable . --force
+uv tool install --python 3.12 --editable . --force
 uv tool update-shell
 ```
 
@@ -97,7 +117,7 @@ aster
 
 无参数 `aster` 会直接进入持续对话；`aster doctor`、`aster run "任务"` 等子命令仍然可用。首次进入尚未初始化的目录时，它会显示规范化后的工作区并询问是否创建 `.astercode/`，不会静默授权用户主目录、磁盘根、系统目录或 UNC，也不会自动向上扩大到 Git 根。`aster` 与兼容命令 `astercode` 都强制把启动目录绑定成唯一 `authorized_root`；项目配置或 `ASTERCODE_PROJECT_ROOT` 不能扩大边界，也不能自行开启 live Provider、SSH、网络、浏览器、插件或桌面控制。live Provider 和模型只能由当前进程继承的用户环境变量明确选择。
 
-新项目配置使用 `astercode.toml`；旧版 AsterCode `config.toml` 仍兼容。普通项目中碰巧存在的同名 `config.toml` 不会再被误当成 AsterCode 配置。若希望任意新项目都默认使用 DeepSeek，可一次性保存非秘密的 Provider/模型选择（API key 仍单独保存在用户环境变量中）：
+新项目配置使用 `astercode.toml`；旧版 AsterCode `config.toml` 仍兼容。普通项目中碰巧存在的同名 `config.toml` 不会再被误当成 AsterCode 配置。若希望任意新项目都默认使用 DeepSeek，可一次性保存非秘密的 Provider/模型选择；API key 不随之持久化，仍由当前终端的隐藏输入或个人 secret broker 注入：
 
 ```powershell
 [Environment]::SetEnvironmentVariable("ASTERCODE_MODEL_PROVIDER", "deepseek", "User")
@@ -124,18 +144,43 @@ Fake Provider 不会凭空生成真实修改；要演示修改，请使用测试
 
 ## API key 与真实模型（可选）
 
-API key 不写入代码、TOML、日志、prompt 或命令行参数。配置只保存环境变量名：
+API key 不写入代码、TOML、日志、prompt、PowerShell profile 或命令行参数。配置只保存环境变量名。Windows 推荐用下面的辅助函数隐藏输入并只注入当前 PowerShell 会话；关闭终端后 key 即消失：
+
+```powershell
+function Set-AsterSessionSecret {
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet("OPENAI_API_KEY", "DEEPSEEK_API_KEY")]
+        [string]$Name,
+        [Parameter(Mandatory)]
+        [string]$Prompt
+    )
+
+    $secure = Read-Host $Prompt -AsSecureString
+    $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try {
+        $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
+        Set-Item -LiteralPath "Env:$Name" -Value $plain
+    }
+    finally {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
+        $plain = $null
+    }
+}
+```
+
+若使用个人密码管理器或 secret broker，应让它在启动 AsterCode 前注入同名进程环境变量。不要用 `SetEnvironmentVariable(..., "User")` 永久保存明文 key；只有 Provider 和模型 ID 适合持久化。
 
 ### OpenAI
 
 ```powershell
-$env:OPENAI_API_KEY = "由 OpenAI 控制台新生成的 key"
+Set-AsterSessionSecret -Name "OPENAI_API_KEY" -Prompt "请输入个人 OpenAI API Key"
 $env:ASTERCODE_MODEL_PROVIDER = "openai"
 $env:ASTERCODE_MODEL_ID = "你的账户实际可用模型 ID"
 uv run astercode run "检查代码并提出修复计划" --root .
 ```
 
-Linux bash 使用 `export OPENAI_API_KEY=...`、`export ASTERCODE_MODEL_PROVIDER=openai` 和 `export ASTERCODE_MODEL_ID=...`。
+Linux bash 使用不会把秘密写入命令历史的隐藏输入，例如 `read -rsp "OpenAI API Key: " OPENAI_API_KEY; export OPENAI_API_KEY; printf '\n'`；Provider 与模型仍分别设置为 `openai` 和账户实际可用的模型 ID。
 
 ### DeepSeek
 
@@ -151,12 +196,13 @@ base_url = "https://api.deepseek.com"
 再通过环境变量提供 key 和模型 ID：
 
 ```powershell
-$env:DEEPSEEK_API_KEY = "由 DeepSeek 平台新生成的 key"
+Set-AsterSessionSecret -Name "DEEPSEEK_API_KEY" -Prompt "请输入个人 DeepSeek API Key"
+$env:ASTERCODE_MODEL_PROVIDER = "deepseek"
 $env:ASTERCODE_MODEL_ID = "deepseek-v4-pro" # 也可以使用 deepseek-v4-flash
 uv run astercode run "检查代码并提出修复计划" --root .
 ```
 
-还必须设置 `$env:ASTERCODE_MODEL_PROVIDER = "deepseek"`。Linux bash 对应使用 `export DEEPSEEK_API_KEY=...`、`export ASTERCODE_MODEL_ID=deepseek-v4-pro` 和 `export ASTERCODE_MODEL_PROVIDER=deepseek`。
+Linux bash 可用 `read -rsp "DeepSeek API Key: " DEEPSEEK_API_KEY; export DEEPSEEK_API_KEY; printf '\n'` 隐藏输入，并设置 `ASTERCODE_MODEL_PROVIDER=deepseek` 与受支持的模型 ID。
 
 AsterCode 的 DeepSeek 适配器使用 OpenAI 兼容的 Chat Completions，而不是 OpenAI Responses 或 Anthropic 协议。它把 `base_url` 固定并重新校验为 `https://api.deepseek.com`，请求 `/chat/completions`，以 `response_format={"type":"json_object"}` 获取严格的内部编排决策。`reasoning` 仅接受 `none`、`low`、`high`、`max`。流式响应只消费最终答案的 `content`，明确忽略 `reasoning_content`；内容会先完整通过 JSON、秘密和终止状态校验，再作为 delta 交给 CLI，避免跨分块秘密绕过脱敏。以上接口选择对应 DeepSeek 官方的[首次调用 API](https://api-docs.deepseek.com/zh-cn/)和[创建对话补全](https://api-docs.deepseek.com/api/create-chat-completion)文档。
 
@@ -176,7 +222,7 @@ uv run astercode config migrate --root .
 
 确认预览内容后才使用 `--write`。写入会在同一项目锁内重新读取并比较源文件身份和 SHA-256；源文件被并行修改时直接冲突退出，不创建备份、不覆盖文件。通过检查后，程序先保存逐字节相同的 `.v0.<nonce>.bak` 备份，再用临时文件、flush/fsync 和原子替换写入规范配置，并重新解析和校验。已经是当前版本时不会重复创建备份。高于当前支持版本或混用旧字段的配置会 fail-closed。环境变量只用于运行时覆盖，永远不会被迁移持久化。
 
-仓库当前的 `config.toml` 仍保留旧格式以便现场兼容验证；上面的预览会报告 `changed=true`，但不会改文件。需要切换到规范 v1 文件时，先审阅预览，再显式执行 `uv run astercode config migrate --root . --write`。
+旧开发电脑上曾用被 Git 忽略的旧格式 `config.toml` 做现场兼容验证；个人电脑的 clean clone 不包含该文件。若本机确有旧配置，上面的预览会报告 `changed=true` 但不会修改文件；需要切换到规范 v1 时，先审阅预览，再显式执行 `uv run astercode config migrate --root . --write`。
 
 ## CLI 命令
 
@@ -302,7 +348,7 @@ SQLite 使用 WAL 和显式 schema migrations，当前 schema v8；包含 sessio
 uv run astercode audit verify --root .
 ```
 
-当前工作区审计只是一个随运行增长的快照：本次核对为 `valid=true, entries=2741`（head `a4436347...`）；历史 smoke 修复时的 `entries=2693` 是当时的记录数，不是永久基线。
+旧开发电脑的审计快照曾核对为 `valid=true, entries=2741`（当时 head `a4436347...`）；历史 smoke 修复时的 `entries=2693` 也只是当时记录数。两者都不是 clean clone 或个人电脑新 `.astercode/` 的永久基线。
 
 ## 测试与质量检查
 
@@ -322,13 +368,13 @@ uv run python scripts/live_chat_cycle_smoke.py --root C:\path\to\empty-test-work
 
 大多数自动化测试不需要 API key、真实网络或 SSH；使用 deterministic Fake Provider/adapter、临时 Git 仓库和 replay fixture。Docker live 测试使用固定摘要镜像，实际验证宿主源码只读、临时副本可写且不回传、生成目录排除、Python/compileall、隐藏 agent state、无网络、超时清理和 start/poll/stop。真实 DeepSeek session `session_d8d98eaef8fe4e6882bf4691bfac7894` 走通 Function Call → 精确审批 → 临时副本 `python -m compileall -q .` → 退出码 0；此前一次复制 `.venv` 的超时被标为 `unknown`，reconcile 确认无残留后才修复并新建 session 重试。该 smoke 不证明成本、远程操作或其他 live 权限安全。
 
-2026-08-25 当前本地发布候选证据为：Windows 11 `431 passed, 5 skipped`，WSL2 Ubuntu `417 passed, 19 skipped`，并在 WSL 以 `ASTERCODE_REQUIRE_LIVE_DOCKER=1` 强制执行 Docker live 测试得到 `6 passed`；两端 `ruff check .`、`mypy src tests`、`uv lock --check`、wheel/sdist 构建和隔离环境 packaged CLI smoke 同时通过。skip 只表示平台或显式 live 条件未满足，不计入已完成能力；每个发布候选均以对应提交的远端 GitHub Actions 结果为最终依据。
+2026-08-25 本地交接候选证据为：Windows 11 `441 passed, 5 skipped`，WSL2 Ubuntu `426 passed, 20 skipped`，并在 WSL 以 `ASTERCODE_REQUIRE_LIVE_DOCKER=1` 强制执行 Docker live 测试得到 `6 passed`；两端 `ruff check .`、`mypy src tests`、`uv lock --check`、wheel/sdist 构建和隔离环境 packaged CLI smoke 同时通过，Windows 固定 Docker Demo 输出 `AsterCode resume demo: PASS`。skip 只表示平台或显式 live 条件未满足，不计入已完成能力；每个发布候选均以对应提交的远端 GitHub Actions 结果为最终依据。
 
 现场 DeepSeek sessions 还覆盖过非 Git 工作区聊天、两轮创建/修改/删除、空工作区路径的安全绑定、拒绝内联解释器后改用已审查文件，以及 Docker 中运行 Python。它们只作为范围有限的兼容性证据，不代表外部 live 集成完成；可复现的公开主演示以不需要凭据的 `scripts/resume_demo.py` 为准。
 
 ## 常见问题
 
-GitHub Actions 的 Ubuntu job 会拉取同一固定摘要镜像，并设置 `ASTERCODE_REQUIRE_LIVE_DOCKER=1` 单独运行 Docker live 测试；因此缺少 Docker、镜像或 attestation 会让 job 失败，不能静默跳过。提交 `0ff88d3` 的远端 Windows/Ubuntu jobs 已通过；后续提交仍必须以对应 workflow 结果为准，不能沿用旧提交的绿色状态。
+GitHub Actions 的 Ubuntu job 会拉取同一固定摘要镜像，并设置 `ASTERCODE_REQUIRE_LIVE_DOCKER=1` 单独运行 Docker live 测试；因此缺少 Docker、镜像或 attestation 会让 job 失败，不能静默跳过。提交 `2d3d13a` 的远端 Windows/Ubuntu jobs 已通过；后续提交仍必须以对应 workflow 结果为准，不能沿用旧提交的绿色状态。
 
 - **没有 API key**：使用 `--fake` 或 `--replay`，这是受支持的离线模式。
 - **`provider-key UNSET`**：只影响真实模型调用，不影响离线测试。DeepSeek 使用 `DEEPSEEK_API_KEY`，OpenAI 使用 `OPENAI_API_KEY`，两者不会互相借用。

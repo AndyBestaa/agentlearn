@@ -87,8 +87,8 @@ def _validate_trusted_powershell7_candidate(candidate: Path, windows_apps_root: 
     return resolved
 
 
-def _windows_system_locations() -> tuple[Path, Path] | None:
-    """Return Program Files and Windows directories from OS APIs, not env."""
+def _windows_system_locations() -> tuple[Path, Path, Path] | None:
+    """Return Program Files, Windows and ProgramData from OS APIs, not env."""
 
     if os.name != "nt":
         return None
@@ -108,13 +108,29 @@ def _windows_system_locations() -> tuple[Path, Path] | None:
         hresult = windll.shell32.SHGetFolderPathW(None, 0x0026, None, 0, program_files_buffer)
         if hresult != 0:
             return None
+        program_data_buffer = ctypes.create_unicode_buffer(32_768)
+        # CSIDL_COMMON_APPDATA resolves the shared ProgramData directory. It
+        # may be redirected independently of the Windows installation drive.
+        hresult = windll.shell32.SHGetFolderPathW(None, 0x0023, None, 0, program_data_buffer)
+        if hresult != 0:
+            return None
         program_files = Path(program_files_buffer.value)
         windows = Path(windows_buffer.value)
-        if not program_files.is_absolute() or not windows.is_absolute():
+        program_data = Path(program_data_buffer.value)
+        if not program_files.is_absolute() or not windows.is_absolute() or not program_data.is_absolute():
             return None
-        return program_files, windows
+        return program_files, windows, program_data
     except (AttributeError, OSError, ValueError):
         return None
+
+
+def _windows_system_drive(system_root: Path) -> str:
+    """Derive a local system drive from an OS-resolved Windows root."""
+
+    system_drive = system_root.drive
+    if not system_root.is_absolute() or re.fullmatch(r"[A-Za-z]:", system_drive) is None:
+        raise ValueError("trusted Windows root does not contain a local absolute drive")
+    return system_drive
 
 
 def discover_trusted_powershell7() -> Path | None:
@@ -130,7 +146,7 @@ def discover_trusted_powershell7() -> Path | None:
     locations = _windows_system_locations()
     if locations is None:
         return None
-    program_files, system_root = locations
+    program_files, system_root, program_data = locations
     classic = program_files / "PowerShell" / "7" / "pwsh.exe"
     try:
         resolved_classic = classic.resolve(strict=True)
@@ -159,10 +175,14 @@ def discover_trusted_powershell7() -> Path | None:
         for key, value in os.environ.items()
         if key in {"WINDIR", "TEMP", "TMP", "PATHEXT", "COMSPEC", "USERPROFILE", "LOCALAPPDATA", "APPDATA"}
     }
+    system_drive = _windows_system_drive(system_root)
     query_env.update(
         {
             "SystemRoot": str(system_root),
             "WINDIR": str(system_root),
+            "SystemDrive": system_drive,
+            "ProgramData": str(program_data),
+            "ProgramFiles": str(program_files),
             "PATH": str(system_root / "System32"),
             "PSModulePath": str(system_root / "System32" / "WindowsPowerShell" / "v1.0" / "Modules"),
         }
@@ -179,6 +199,7 @@ def discover_trusted_powershell7() -> Path | None:
             check=False,
             timeout=10,
             env=query_env,
+            cwd=str(resolved_inbox.parent),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -1075,12 +1096,24 @@ class ProcessTools:
         allowed = {"SystemRoot", "WINDIR", "TEMP", "TMP", "USERPROFILE", "HOME", "LANG", "LC_ALL", "PATHEXT", "COMSPEC"}
         env = {key: value for key, value in os.environ.items() if key in allowed}
         if os.name == "nt":
-            system_root = env.get("SystemRoot") or env.get("WINDIR") or r"C:\Windows"
-            program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+            locations = _windows_system_locations()
+            if locations is None:
+                raise UnsandboxedExecutionBlocked("trusted Windows system locations are unavailable")
+            program_files, system_root, program_data = locations
+            system_drive = _windows_system_drive(system_root)
+            env.update(
+                {
+                    "SystemRoot": str(system_root),
+                    "WINDIR": str(system_root),
+                    "SystemDrive": system_drive,
+                    "ProgramData": str(program_data),
+                    "ProgramFiles": str(program_files),
+                }
+            )
             safe_path = [
                 str(Path(system_root) / "System32"),
                 str(Path(system_root) / "System32" / "WindowsPowerShell" / "v1.0"),
-                system_root,
+                str(system_root),
             ]
             powershell_7 = program_files / "PowerShell" / "7"
             if powershell_7.is_dir():

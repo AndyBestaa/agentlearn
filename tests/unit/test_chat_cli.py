@@ -546,7 +546,7 @@ def test_chat_collects_bound_approval_instead_of_treating_text_as_consent(tmp_pa
 
     result = CliRunner().invoke(
         cli.app,
-        ["chat", "--root", str(tmp_path)],
+        ["chat", "--root", str(tmp_path), "--fake"],
         input="write hello.py\nyes, do it please\nd\n/exit\n",
     )
 
@@ -593,7 +593,7 @@ def test_chat_can_grant_the_exact_p1_action_for_the_session(tmp_path: Path, monk
 
     result = CliRunner().invoke(
         cli.app,
-        ["chat", "--root", str(tmp_path)],
+        ["chat", "--root", str(tmp_path), "--fake"],
         input="write hello.py\ns\n/exit\n",
     )
 

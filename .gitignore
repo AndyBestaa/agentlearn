@@ -8,6 +8,8 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .langgraph_api/
+# Literal Windows environment-expansion artifacts are machine-local state.
+%SystemDrive%/
 .astercode/
 config.toml
 dist/

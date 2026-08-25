@@ -21,6 +21,7 @@ uv lock --check
 - [ ] 审阅所有未提交文件，确认没有覆盖用户无关修改。
 - [ ] `pyproject.toml`、包内版本、CHANGELOG 和计划发布名一致。
 - [ ] README 的证据数字注明目标 commit，不保留未确认的远端状态、旧失败或旧测试总数。
+- [ ] `HANDOFF.md` 的里程碑快照、下一步和验证命令与 implementation plan 保持一致，下一代理不需要旧聊天记录。
 - [ ] 不自动创建 tag/GitHub Release；只有用户明确批准后执行外部发布。
 
 ## 3. 秘密与仓库卫生
@@ -31,10 +32,31 @@ git status --ignored --short
 ```
 
 - [ ] 仓库、fixture、日志和文档没有真实 API key、私钥、cookie、审批 nonce 或用户敏感路径数据。
+- [ ] 已审阅所有可达 Git 历史/对象；source preflight 主要检查当前 index/worktree，不能单独证明历史从未包含秘密。
 - [ ] `.astercode/`、临时 workspace、构建产物、wheelhouse 和真实 session 不进入提交。
 - [ ] 配置示例只写环境变量名或占位符。
 
-## 4. Windows 质量门
+## 4. 跨设备公开迁移
+
+- [ ] 已确认公司知识产权、保密、客户合同和设备管理政策允许公开源码；技术预检不代替授权。
+- [ ] 迁移只通过获批的公开 Git commit/tag；不复制整个工作区、压缩包、网盘或 USB 内容。
+- [ ] 不迁移 `.astercode/`、`config.toml`、公司 `astercode.toml`、`.env`、`.venv/`、意外 `%SystemDrive%/` 缓存、SSH/浏览器凭据、审计/session/记忆、内部 IP/域名/路径或公司数据。
+- [ ] 公司电脑在 clean worktree 运行并保存结果：
+
+```powershell
+python scripts/portability_preflight.py --root . --profile source
+python scripts/portability_preflight.py --root . --profile source --format json
+```
+
+- [ ] `--allow-dirty` 仅用于开发诊断，未被当作公开交接凭证。
+- [ ] 个人电脑从公开 Git clean clone 同一 SHA，并从零生成 `.astercode/` 与配置。
+- [ ] 个人电脑重新运行 `python scripts/portability_preflight.py --root . --profile demo`、doctor 和离线 Demo。
+- [ ] 只持久化 `ASTERCODE_MODEL_PROVIDER`/`ASTERCODE_MODEL_ID`；离职后仍获授权的 key 通过隐藏输入或个人 secret broker 注入当前进程。
+- [ ] 公司电脑环境变量按公司保留/清理政策处理，没有擅自删除审计证据或共享凭据。
+
+完整步骤见 [windows-migration.md](windows-migration.md)。
+
+## 5. Windows 质量门
 
 ```powershell
 uv sync --extra dev --extra browser --frozen
@@ -52,7 +74,7 @@ uv run python scripts/package_smoke.py
 - [ ] skipped 不计为通过能力。
 - [ ] PowerShell 7、Windows Job Object、symlink/junction/reparse 的平台测试按当前机器能力实际运行；未满足时明确记录。
 
-## 5. WSL/Linux 质量门
+## 6. WSL/Linux 质量门
 
 在已有的独立 Python 3.12 WSL 环境中运行同一锁定依赖和完整测试：
 
@@ -71,7 +93,7 @@ uv run python scripts/package_smoke.py
 - [ ] 记录 distro、Python、Docker engine、passed/skipped 和 live Docker 数字。
 - [ ] WSL + Docker Desktop 的结论不外推到裸机 Linux 或独立生产 daemon。
 
-## 6. 固定作品集 Demo
+## 7. 固定作品集 Demo
 
 ```powershell
 uv run astercode doctor --root .
@@ -87,7 +109,7 @@ uv run python scripts/resume_demo.py --backend docker --cleanup
 
 若只能运行 `--backend fake`，发布记录必须写明 simulated，且该项不能勾选为 Docker Demo 通过。
 
-## 7. 可选 live Provider smoke
+## 8. 可选 live Provider smoke
 
 - [ ] 仅从当前用户环境/secret broker 读取 key；终端、日志和命令行不显示值。
 - [ ] 使用新建临时工作区、低预算任务、明确的无网络/不 push 范围。
@@ -95,15 +117,15 @@ uv run python scripts/resume_demo.py --backend docker --cleanup
 - [ ] DeepSeek smoke 不替代 OpenAI smoke；没有 OpenAI 凭据时写 `LIVE OPENAI NOT VERIFIED`。
 - [ ] 不连接真实 SSH、生产服务或用户浏览器登录态。
 
-## 8. 供应链与文档
+## 9. 供应链与文档
 
 - [ ] `doctor` 报告 Docker 固定镜像和 `cosign`/`syft`/`trivy` 可用性。
 - [ ] 固定 RepoDigest 只表示内容寻址，不单独宣称签名可信、SBOM 或漏洞扫描通过。
 - [ ] 若发布记录声称签名/SBOM/漏洞扫描，附实际命令、工具版本、离线/在线数据库状态和输出 artifact。
-- [ ] README、architecture、implementation-plan、threat-model、demo-guide、resume-project、CHANGELOG 相互一致。
+- [ ] README、HANDOFF、architecture、implementation-plan、threat-model、demo-guide、windows-migration、resume-project、CHANGELOG 相互一致。
 - [ ] README 中的安装、doctor、Demo、测试和 packaged CLI 命令均已在目标提交运行。
 
-## 9. GitHub 证据与发布
+## 10. GitHub 证据与发布
 
 - [ ] 推送目标 commit 后，等待 `.github/workflows/ci.yml` 的 Windows/Ubuntu jobs 完成。
 - [ ] Ubuntu required Docker regression 未被 skip；缺少镜像/attestation 时应使 job 失败。
@@ -111,7 +133,7 @@ uv run python scripts/resume_demo.py --backend docker --cleanup
 - [ ] 审阅 GitHub diff，确认没有 secret、临时 artifact 或意外大文件。
 - [ ] 经用户明确批准后再创建 tag/Release；Release notes 列出 verified、simulated、blocked 和 known limitations。
 
-## 10. 发布证据模板
+## 11. 发布证据模板
 
 ```text
 target_commit: <sha>
