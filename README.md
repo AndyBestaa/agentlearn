@@ -54,7 +54,7 @@ flowchart LR
 
 发布前必须按 [docs/release-checklist.md](docs/release-checklist.md) 在目标提交重新刷新测试数字。真实 OpenAI、SSH、浏览器外网、GUI 和插件进程隔离继续标记为 `LIVE INTEGRATION NOT VERIFIED` 或 `BLOCKED`。
 
-换电脑或交给另一位 AI 编程代理继续开发时，从根目录的 [HANDOFF.md](HANDOFF.md) 开始；其中记录了必读顺序、核心代码地图、M0-M7 快照、无需真实 key 的质量门、后续优先级和可直接复制给下一代理的启动指令，不依赖当前 Codex 对话历史。这里的 API key 始终指 AsterCode 自己调用“大脑模型”的运行凭据，不是开发助手的交接配置。
+换电脑或交给另一位 AI 编程代理继续开发时，只需先让它完整阅读根目录的 [AI_AGENT_START.md](AI_AGENT_START.md)；该入口会要求它现场核对 Git，并继续阅读详细的 [HANDOFF.md](HANDOFF.md)、实施计划、架构和威胁模型，不依赖当前 Codex 对话历史。这里的 API key 始终指 AsterCode 自己调用“大脑模型”的运行凭据，不是开发助手的交接配置。
 
 ## 安装与首次启动
 
@@ -96,7 +96,7 @@ python scripts/portability_preflight.py --root . --profile source
 python scripts/portability_preflight.py --root . --profile demo
 ```
 
-开发期间可用 `--allow-dirty` 查看未提交工作树的诊断，但它不是可公开迁移的通过凭证；自动化取证可追加 `--format json`。个人电脑只使用离职后仍明确获准使用的 Provider key，并以隐藏输入注入当前终端；key 不进入 Git。完整跨电脑步骤见 [Windows 安全迁移指南](docs/windows-migration.md)，下一 AI 编程代理的开发入口见 [HANDOFF.md](HANDOFF.md)。
+开发期间可用 `--allow-dirty` 查看未提交工作树的诊断，但它不是可公开迁移的通过凭证；自动化取证可追加 `--format json`。个人电脑只使用离职后仍明确获准使用的 Provider key，并以隐藏输入注入当前终端；key 不进入 Git。完整跨电脑步骤见 [Windows 安全迁移指南](docs/windows-migration.md)，下一 AI 编程代理的统一入口见 [AI_AGENT_START.md](AI_AGENT_START.md)。
 
 ### 在任意 VS Code 项目中直接输入 `aster`
 

@@ -21,7 +21,7 @@ uv lock --check
 - [ ] 审阅所有未提交文件，确认没有覆盖用户无关修改。
 - [ ] `pyproject.toml`、包内版本、CHANGELOG 和计划发布名一致。
 - [ ] README 的证据数字注明目标 commit，不保留未确认的远端状态、旧失败或旧测试总数。
-- [ ] `HANDOFF.md` 的里程碑快照、下一步和验证命令与 implementation plan 保持一致，下一代理不需要旧聊天记录。
+- [ ] `AI_AGENT_START.md` 仍是稳定统一入口；`HANDOFF.md` 的里程碑快照、下一步和验证命令与 implementation plan 保持一致，下一代理不需要旧聊天记录。
 - [ ] 不自动创建 tag/GitHub Release；只有用户明确批准后执行外部发布。
 
 ## 3. 秘密与仓库卫生

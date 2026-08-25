@@ -6,7 +6,8 @@
 
 ### Added
 
-- 新增根目录 `HANDOFF.md` 作为跨电脑和跨 AI 编程代理的统一接手入口：记录 M0-M7 快照、必读顺序、无真实 key 质量门、推荐后续任务和可复制的启动指令，使后续开发不依赖当前 Codex 对话历史。
+- 新增根目录 `AI_AGENT_START.md` 作为跨模型、跨对话的稳定统一入口：下一开发助手只需先阅读该文件，即会按只读检查、权威文档路由、权限边界、开发循环和验证门恢复项目上下文；易过期的里程碑数字仍由 `HANDOFF.md` 和实施计划维护。
+- 新增根目录 `HANDOFF.md` 作为跨电脑和跨 AI 编程代理的详细交接文档：记录 M0-M7 快照、必读顺序、无真实 key 质量门、推荐后续任务和可复制的启动指令，使后续开发不依赖当前 Codex 对话历史。
 - 新增公司 Windows 到个人 Windows 的安全迁移指南与 portable source/demo 预检命令：先确认知识产权和保密授权，只通过公开 Git clean clone 迁移源码，不复制 `.astercode`、本地配置、环境文件、虚拟环境、SSH/浏览器凭据或审计状态；离职后仍获授权的 Provider key 由隐藏输入重新注入当前会话，只持久化 Provider/模型选择。
 - Windows PowerShell 7 发现不再信任 PATH、`ProgramFiles` 或 `SystemRoot` 环境覆盖：宿主通过 Windows known-folder API 取得系统目录，支持固定 MSI 路径和经包名/版本/架构/发布者/reparse 校验的 Microsoft Store 安装；本机 Store 版 `pwsh` 的 NoProfile/UTF-8 smoke 已真实执行。
 - 新增固定作品集演示入口 `scripts/resume_demo.py` 与 `examples/resume_demo/`：从故障基线开始，串联读取、最小 patch、精确 P3 审批/checkpoint resume、Docker 测试、Git diff/status 和审计链核验。默认 Docker backend 必须使用真实 attestation；`--backend fake` 在证据和终端中明确标记 simulated，不声称启动了进程或沙箱。最终发布通过状态仍以目标提交实际运行结果为准。

@@ -1,6 +1,6 @@
 # AsterCode 开发交接
 
-这份文件是新电脑和下一位 AI 编程代理的统一接手入口。它说明如何继续开发 AsterCode，不是运行时系统提示词；运行时提示词仍在 [`prompts/coding_agent.md`](prompts/coding_agent.md)。
+这份文件是新电脑和下一位 AI 编程代理的详细开发交接。统一的最外层启动入口是 [`AI_AGENT_START.md`](AI_AGENT_START.md)，它会要求代理先只读核对，再阅读本文件。这里不是运行时系统提示词；运行时提示词仍在 [`prompts/coding_agent.md`](prompts/coding_agent.md)。
 
 ## 接手目标
 

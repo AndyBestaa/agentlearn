@@ -1,6 +1,6 @@
 # AsterCode 实施计划与当前基线
 
-新电脑或新 AI 编程代理应先阅读仓库根目录的 [`HANDOFF.md`](../HANDOFF.md)。本文件保留详细里程碑边界；HANDOFF 提供接手顺序、最小质量门和下一任务入口。
+新电脑或新 AI 编程代理应先阅读仓库根目录的统一入口 [`AI_AGENT_START.md`](../AI_AGENT_START.md)。该入口会要求代理现场核对 Git，并继续阅读 [`HANDOFF.md`](../HANDOFF.md)；本文件保留详细里程碑边界，HANDOFF 提供当前快照、最小质量门和下一任务入口。
 
 本文件把“代码已存在”“离线 fake 已验证”和“真实 live 未验证”分开。没有 API key 时仍可推进离线部分；真实 Provider 不是后续本地安全工作的前置条件。旧格式配置迁移由自动化 fixture 覆盖；任何被 Git 忽略的本地 `config.toml` 都不属于源码或交接物，clean clone 不包含它。`config migrate` 的预览/写入能力已实现，但不会替用户迁移机器本地配置。
 
