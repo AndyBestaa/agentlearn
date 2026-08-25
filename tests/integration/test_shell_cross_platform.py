@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from astercode.tools.process import ProcessTools
+from astercode.tools.process import ProcessTools, discover_trusted_powershell7
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX bash smoke requires a POSIX host")
@@ -59,11 +59,9 @@ def test_git_bash_no_profile_utf8_and_lf_smoke(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(os.name != "nt", reason="PowerShell compatibility smoke is Windows-specific")
 def test_powershell7_no_profile_and_utf8_smoke(tmp_path: Path) -> None:
-    if not Path(r"C:\Program Files\PowerShell\7\pwsh.exe").is_file():
+    if discover_trusted_powershell7() is None:
         pytest.skip("PowerShell 7 is unavailable on this host")
-    tools = ProcessTools(
-        [tmp_path], sandbox_enforced=True, network_policy_enforced=True
-    )
+    tools = ProcessTools([tmp_path], sandbox_enforced=True, network_policy_enforced=True)
 
     result = tools.shell(
         "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); Write-Output '你好; literal-$HOME'",

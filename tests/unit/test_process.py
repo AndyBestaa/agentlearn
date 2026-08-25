@@ -9,7 +9,12 @@ from pathlib import Path
 import pytest
 
 from astercode.tools import process as process_module
-from astercode.tools.process import ProcessTools
+from astercode.tools.process import (
+    ProcessTools,
+    _validate_trusted_powershell7_candidate,
+    _windows_system_locations,
+    discover_trusted_powershell7,
+)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX /proc zombie regression")
@@ -32,9 +37,7 @@ def test_process_identity_treats_an_unreaped_zombie_as_stopped() -> None:
         proc.wait(timeout=5)
 
 
-def test_process_fails_closed_without_verified_sandbox(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_process_fails_closed_without_verified_sandbox(tmp_path: Path, monkeypatch) -> None:
     def unexpected_spawn(*args, **kwargs):
         del args, kwargs
         raise AssertionError("subprocess must not start before explicit boundary approval")
@@ -50,9 +53,7 @@ def test_process_fails_closed_without_verified_sandbox(
     assert "no verified process sandbox" in str(result.error)
 
 
-def test_process_rejects_outside_cwd_before_spawn(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_process_rejects_outside_cwd_before_spawn(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "workspace"
     root.mkdir()
     outside = tmp_path / "outside"
@@ -78,9 +79,7 @@ def test_process_rejects_outside_cwd_before_spawn(
     assert "outside authorized roots" in str(result.error)
 
 
-def test_process_rejects_secret_valued_environment_before_spawn(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_process_rejects_secret_valued_environment_before_spawn(tmp_path: Path, monkeypatch) -> None:
     def unexpected_spawn(*args, **kwargs):
         del args, kwargs
         raise AssertionError("secret-bearing process must not start")
@@ -103,9 +102,7 @@ def test_process_rejects_secret_valued_environment_before_spawn(
 
 
 def test_structured_argv_treats_shell_metacharacters_as_one_argument(tmp_path: Path) -> None:
-    tools = ProcessTools(
-        [tmp_path], sandbox_enforced=True, network_policy_enforced=True
-    )
+    tools = ProcessTools([tmp_path], sandbox_enforced=True, network_policy_enforced=True)
     hostile_name = "name;$(touch pwned)`whoami` & echo bad.txt"
 
     result = tools.exec(
@@ -146,9 +143,7 @@ def test_process_rejects_non_finite_or_over_budget_timeout(tmp_path: Path, monke
     assert tools.exec([sys.executable, "-c", "pass"], str(tmp_path), timeout=6, allow_unsandboxed=True).status == "failed"
 
 
-def test_approval_cannot_bypass_unverified_network_boundary(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_approval_cannot_bypass_unverified_network_boundary(tmp_path: Path, monkeypatch) -> None:
     def unexpected_spawn(*args, **kwargs):
         del args, kwargs
         raise AssertionError("process must not start without verified network isolation")
@@ -169,3 +164,79 @@ def test_approval_cannot_bypass_unverified_network_boundary(
     assert result.metadata["blocked"] is True
     assert "no verified process enforcement" in str(result.error)
     assert "approval cannot grant unrestricted host networking" in str(result.error)
+
+
+def test_store_powershell_candidate_requires_expected_package_identity(
+    tmp_path: Path,
+) -> None:
+    windows_apps = tmp_path / "WindowsApps"
+    package = windows_apps / "Microsoft.PowerShell_7.6.5.0_x64__8wekyb3d8bbwe"
+    package.mkdir(parents=True)
+    executable = package / "pwsh.exe"
+    executable.write_bytes(b"test")
+
+    assert _validate_trusted_powershell7_candidate(executable, windows_apps) == executable.resolve()
+
+    wrong_publisher = windows_apps / "Microsoft.PowerShell_7.6.5.0_x64__untrustedpublisher"
+    wrong_publisher.mkdir()
+    wrong_executable = wrong_publisher / "pwsh.exe"
+    wrong_executable.write_bytes(b"test")
+    assert _validate_trusted_powershell7_candidate(wrong_executable, windows_apps) is None
+
+
+def test_store_powershell_candidate_rejects_an_outside_path(
+    tmp_path: Path,
+) -> None:
+    windows_apps = tmp_path / "WindowsApps"
+    windows_apps.mkdir()
+    outside = tmp_path / "Microsoft.PowerShell_7.6.5.0_x64__8wekyb3d8bbwe"
+    outside.mkdir()
+    executable = outside / "pwsh.exe"
+    executable.write_bytes(b"test")
+
+    assert _validate_trusted_powershell7_candidate(executable, windows_apps) is None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Store discovery is Windows-specific")
+def test_discovers_a_validated_store_powershell_install(tmp_path: Path, monkeypatch) -> None:
+    program_files = tmp_path / "Program Files"
+    package = program_files / "WindowsApps" / "Microsoft.PowerShell_7.6.5.0_x64__8wekyb3d8bbwe"
+    package.mkdir(parents=True)
+    executable = package / "pwsh.exe"
+    executable.write_bytes(b"test")
+    system_root = tmp_path / "Windows"
+    inbox = system_root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    inbox.parent.mkdir(parents=True)
+    inbox.write_bytes(b"test")
+    monkeypatch.setattr(
+        process_module,
+        "_windows_system_locations",
+        lambda: (program_files, system_root),
+    )
+
+    def fake_run(*args, **kwargs):
+        del args, kwargs
+        return subprocess.CompletedProcess([], 0, f"{package}\n", "")
+
+    monkeypatch.setattr(process_module.subprocess, "run", fake_run)
+
+    assert discover_trusted_powershell7() == executable.resolve()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows known folders are Windows-specific")
+def test_windows_system_locations_ignore_inherited_path_overrides(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("ProgramFiles", str(tmp_path / "untrusted-program-files"))
+    monkeypatch.setenv("ProgramW6432", str(tmp_path / "untrusted-program-w6432"))
+    monkeypatch.setenv("SystemRoot", str(tmp_path / "untrusted-windows"))
+    monkeypatch.setenv("WINDIR", str(tmp_path / "untrusted-windir"))
+
+    locations = _windows_system_locations()
+
+    assert locations is not None
+    program_files, windows = locations
+    assert tmp_path not in program_files.parents
+    assert tmp_path not in windows.parents
+    assert program_files.is_dir()
+    assert windows.is_dir()

@@ -4,19 +4,42 @@
 
 ## 运行时分层
 
-```text
-CLI / Rich 事件界面
-        │
-        ▼
-LangGraph Orchestrator
-OBSERVE → PLAN → POLICY_CHECK → APPROVAL_GATE
-        → TOOL_CALL → CAPTURE → VERIFY → CHECKPOINT
-        │
-        ├── ModelProvider（Fake / replay / OpenAI Responses / DeepSeek Chat）
-        ├── PolicyEngine + LocalToolGateway
-        ├── ToolRegistry（JSON Schema、capability、risk、timeout、幂等性）
-        ├── Executors（fs / process / shell / git / SSH / browser / extensions）
-        └── Storage（SQLite WAL、checkpoint、memory、audit、artifacts）
+```mermaid
+flowchart TB
+    U[用户] --> C[CLI / Rich 事件界面]
+    C --> O[LangGraph Orchestrator]
+    O --> M[ModelProvider<br/>Fake / replay / OpenAI / DeepSeek]
+    M -->|结构化 proposal| O
+    O --> P[PolicyEngine + Approval Gateway]
+    P --> R[ToolRegistry<br/>JSON Schema / capability / risk / timeout]
+    R --> E[Executors<br/>fs / process / shell / git]
+    E -->|ToolResult / diff / exit code| O
+    O --> D[(SQLite WAL<br/>checkpoint / memory / audit / artifacts)]
+    P --> D
+    E --> D
+
+    P -. 等待或拒绝 .-> C
+    R -. live adapter 未满足独立边界 .-> B[BLOCKED]
+    X[SSH / Browser / MCP / GUI] -. 仅在显式装配并验证后 .-> R
+```
+
+实线表示当前本地垂直链路中由运行时执行或持久化的控制/数据流。虚线表示不会被提示词或普通审批绕过的边界：动作可能暂停、拒绝，或者因为 SSH、浏览器、插件、GUI 缺少独立的 OS/网络证明而保持 `BLOCKED`。模型从不直接持有 executor；它只能返回受 schema 约束的 proposal。
+
+Orchestrator 的一轮状态转换为：
+
+```mermaid
+stateDiagram-v2
+    [*] --> OBSERVE
+    OBSERVE --> PLAN
+    PLAN --> POLICY_CHECK
+    POLICY_CHECK --> APPROVAL_GATE
+    APPROVAL_GATE --> TOOL_CALL: allow / exact approval
+    APPROVAL_GATE --> CHECKPOINT: wait / deny / blocked
+    TOOL_CALL --> CAPTURE
+    CAPTURE --> VERIFY
+    VERIFY --> CHECKPOINT
+    CHECKPOINT --> OBSERVE: continue
+    CHECKPOINT --> [*]: completed / partial / blocked / cancelled / failed
 ```
 
 ### CLI 层

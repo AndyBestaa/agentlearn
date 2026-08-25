@@ -17,6 +17,7 @@ from typing import Any, Coroutine, Mapping
 import typer
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 from .config import (
     AppConfig,
@@ -206,9 +207,7 @@ def _export_destination(output: Path, cfg: Any, *, allow_outside_root: bool, yes
         ).resolved
     except PathAuthorizationError as exc:
         if not (allow_outside_root and yes):
-            raise typer.BadParameter(
-                "outside-root export requires both --allow-outside-root and --yes"
-            ) from exc
+            raise typer.BadParameter("outside-root export requires both --allow-outside-root and --yes") from exc
         candidate = output.expanduser()
         if not candidate.is_absolute():
             candidate = cfg.project_root / candidate
@@ -271,11 +270,7 @@ def init(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), force
         else:
             _atomic_write_bytes(config_path, _minimal_config(root).encode("utf-8"))
         typer.echo(f"已创建: {config_path}")
-    cfg = (
-        _chat_config(root)
-        if _STRICT_SHORTCUT
-        else _config(root, config_path if config_path.exists() else None)
-    )
+    cfg = _chat_config(root) if _STRICT_SHORTCUT else _config(root, config_path if config_path.exists() else None)
     storage = _storage(cfg)
     storage.initialize()
     typer.echo(f"数据库: {cfg.storage.database_path}")
@@ -300,7 +295,20 @@ def doctor(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False)) -> 
         checks.append(("ripgrep", "INFO", "PATH candidate is not at a trusted system location; using safe fallback search"))
     else:
         checks.append(("ripgrep", "INFO", "trusted binary not found; using safe fallback search"))
-    checks.append(("PowerShell 7", "OK" if shutil.which("pwsh") else "NOT VERIFIED", shutil.which("pwsh") or "only Windows PowerShell may be available"))
+    if os.name == "nt":
+        from .tools.process import discover_trusted_powershell7
+
+        trusted_pwsh = discover_trusted_powershell7()
+    else:
+        path_pwsh = shutil.which("pwsh")
+        trusted_pwsh = Path(path_pwsh).resolve() if path_pwsh else None
+    checks.append(
+        (
+            "PowerShell 7",
+            "OK" if trusted_pwsh else "NOT VERIFIED",
+            str(trusted_pwsh) if trusted_pwsh else "trusted installation not found",
+        )
+    )
     bash = shutil.which("bash")
     if bash is None and os.name == "nt":
         candidate = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git" / "bin" / "bash.exe"
@@ -444,7 +452,9 @@ def run_task(
     root: Path = typer.Option(Path.cwd(), "--root", file_okay=False),
     session_id: str | None = typer.Option(None, "--session"),
     fake: bool = typer.Option(False, "--fake", help="Use deterministic provider; no API key/network"),
-    auto_approve: bool = typer.Option(False, "--allow-workspace-writes", "--auto-approve", help="Explicitly allow P1 reversible workspace writes for this run"),
+    auto_approve: bool = typer.Option(
+        False, "--allow-workspace-writes", "--auto-approve", help="Explicitly allow P1 reversible workspace writes for this run"
+    ),
     stream: bool = typer.Option(True, "--stream/--no-stream", help="Print redacted provider/tool lifecycle events"),
     replay: Path | None = typer.Option(None, "--replay", help="Authorized deterministic provider replay JSON"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Evaluate policy and tool arguments without executing handlers"),
@@ -453,7 +463,9 @@ def run_task(
     max_tokens: int | None = typer.Option(None, "--max-tokens", min=1, help="Override the total-token budget for this run"),
     max_input_tokens: int | None = typer.Option(None, "--max-input-tokens", min=1, help="Override the input-token budget for this run"),
     max_output_tokens: int | None = typer.Option(None, "--max-output-tokens", min=1, help="Override the output-token budget for this run"),
-    max_elapsed_seconds: float | None = typer.Option(None, "--max-elapsed-seconds", min=0.1, help="Override the elapsed-time budget for this run"),
+    max_elapsed_seconds: float | None = typer.Option(
+        None, "--max-elapsed-seconds", min=0.1, help="Override the elapsed-time budget for this run"
+    ),
 ) -> None:
     """Run one task through the LangGraph orchestrator."""
     budget_overrides = {
@@ -469,7 +481,17 @@ def run_task(
         if value is not None
     }
     try:
-        result = _run_task_impl(task, root=_root(root), session_id=session_id, fake=fake, auto_approve=auto_approve, stream=stream, replay=replay, dry_run=dry_run, budget_overrides=budget_overrides)
+        result = _run_task_impl(
+            task,
+            root=_root(root),
+            session_id=session_id,
+            fake=fake,
+            auto_approve=auto_approve,
+            stream=stream,
+            replay=replay,
+            dry_run=dry_run,
+            budget_overrides=budget_overrides,
+        )
     except KeyboardInterrupt:
         console.print(
             "\n已取消；AsterCode 已触发运行时清理，不会启动新的工具调用。",
@@ -481,7 +503,19 @@ def run_task(
         raise typer.Exit(code=2)
 
 
-def _run_task_impl(task: str, *, root: Path, session_id: str | None, fake: bool, auto_approve: bool, stream: bool = False, replay: Path | None = None, dry_run: bool = False, budget_overrides: dict[str, Any] | None = None, strict_workspace: bool = False) -> dict[str, Any]:
+def _run_task_impl(
+    task: str,
+    *,
+    root: Path,
+    session_id: str | None,
+    fake: bool,
+    auto_approve: bool,
+    stream: bool = False,
+    replay: Path | None = None,
+    dry_run: bool = False,
+    budget_overrides: dict[str, Any] | None = None,
+    strict_workspace: bool = False,
+) -> dict[str, Any]:
     """Synchronous boundary used by Typer and interactive chat."""
 
     return _run_sync(
@@ -500,7 +534,19 @@ def _run_task_impl(task: str, *, root: Path, session_id: str | None, fake: bool,
     )
 
 
-async def _run_task_async(task: str, *, root: Path, session_id: str | None, fake: bool, auto_approve: bool, stream: bool = False, replay: Path | None = None, dry_run: bool = False, budget_overrides: dict[str, Any] | None = None, strict_workspace: bool = False) -> dict[str, Any]:
+async def _run_task_async(
+    task: str,
+    *,
+    root: Path,
+    session_id: str | None,
+    fake: bool,
+    auto_approve: bool,
+    stream: bool = False,
+    replay: Path | None = None,
+    dry_run: bool = False,
+    budget_overrides: dict[str, Any] | None = None,
+    strict_workspace: bool = False,
+) -> dict[str, Any]:
     """Async task core; callers that already own a loop can await it directly."""
 
     root = _root(root)
@@ -532,6 +578,7 @@ async def _run_task_async(task: str, *, root: Path, session_id: str | None, fake
         provider = DeterministicFakeProvider(replay_data)
     elif fake:
         provider = DeterministicFakeProvider()
+
     def show_event(event: Any) -> None:
         if not stream:
             return
@@ -570,11 +617,7 @@ def _print_stream_event(event: Any) -> None:
         return
     if event_type == "provider.completed":
         console.print()
-    details = {
-        key: event[key]
-        for key in ("tool", "attempt", "response_id")
-        if isinstance(event, dict) and event.get(key) is not None
-    }
+    details = {key: event[key] for key in ("tool", "attempt", "response_id") if isinstance(event, dict) and event.get(key) is not None}
     line = f"{event_type} {json.dumps(details, ensure_ascii=False, default=str)}"
     console.print(_terminal_safe(line), style="dim", markup=False, highlight=False)
 
@@ -593,9 +636,7 @@ def _prepare_chat_workspace(root: Path) -> None:
             raise typer.BadParameter(".astercode must be a real local directory")
         return
     if not sys.stdin.isatty():
-        raise typer.BadParameter(
-            f"workspace is not initialized; run 'aster init --root {root}' first"
-        )
+        raise typer.BadParameter(f"workspace is not initialized; run 'aster init --root {root}' first")
     console.print("Aster 将只在此目录保存状态并执行操作：")
     console.print(_terminal_safe(root), style="bold", markup=False)
     if not typer.confirm(_terminal_safe(f"创建 {state} 并进入对话？"), default=False):
@@ -607,14 +648,32 @@ def _chat_help() -> None:
     console.print(
         "[bold]对话命令[/bold]\n"
         "  /help              显示帮助\n"
-        "  /status            查看当前会话状态\n"
+        "  /status            查看当前会话摘要（完整 JSON 可用 astercode status --session ID）\n"
         "  /new               开始新会话\n"
         "  /resume SESSION_ID 切换到已有会话\n"
         "  /exit              退出（也支持 exit、quit、:q）"
     )
 
 
+_CHAT_STATUS_LABELS = {
+    "completed": "已完成",
+    "waiting_approval": "等待审批",
+    "partial": "部分完成",
+    "blocked": "已安全停止",
+    "cancelled": "已取消",
+    "failed": "失败",
+    "running": "处理中",
+}
+
+
+def _chat_status_label(status: object) -> str:
+    raw = str(status or "unknown")
+    translated = _CHAT_STATUS_LABELS.get(raw, "未知状态")
+    return f"{translated}（{raw}）"
+
+
 def _print_chat_result(result: Mapping[str, Any], seen_actions: set[str]) -> None:
+    new_tool_results = 0
     for item in result.get("tool_results", []) if isinstance(result.get("tool_results"), list) else []:
         if not isinstance(item, Mapping):
             continue
@@ -623,10 +682,9 @@ def _print_chat_result(result: Mapping[str, Any], seen_actions: set[str]) -> Non
             continue
         if action_id:
             seen_actions.add(action_id)
+        new_tool_results += 1
         console.print(
-            _terminal_safe(
-                f"工具 {item.get('tool', 'unknown')}: {item.get('status', 'unknown')}"
-            ),
+            _terminal_safe(f"工具 {item.get('tool', 'unknown')}: {item.get('status', 'unknown')}"),
             style="dim",
             markup=False,
         )
@@ -635,25 +693,74 @@ def _print_chat_result(result: Mapping[str, Any], seen_actions: set[str]) -> Non
         console.print("Aster> ", style="bold cyan", end="")
         console.print(_terminal_safe(messages[-1]), markup=False, highlight=False)
     status = str(result.get("status", "unknown"))
-    if status not in {"completed", "running"}:
+    if status == "completed" and new_tool_results:
+        console.print("✓ 已完成", style="green", markup=False)
+    elif status not in {"completed", "running"}:
         console.print(
-            _terminal_safe(f"状态：{status}"),
+            _terminal_safe(f"状态：{_chat_status_label(status)}"),
             style="yellow",
             markup=False,
         )
     blockers = result.get("blockers", [])
     if isinstance(blockers, list):
         for blocker in blockers[-3:]:
-            console.print(_terminal_safe(f"提示：{blocker}"), style="yellow", markup=False)
+            console.print(_terminal_safe(f"原因：{blocker}"), style="yellow", markup=False)
+
+
+def _print_chat_status(record: Mapping[str, Any]) -> None:
+    """Render a compact, terminal-safe session summary for interactive chat."""
+
+    state = record.get("state")
+    snapshot = state if isinstance(state, Mapping) else record
+    usage = snapshot.get("usage")
+    usage = usage if isinstance(usage, Mapping) else {}
+    budget = snapshot.get("budget")
+    budget = budget if isinstance(budget, Mapping) else {}
+    session_id = record.get("session_id") or snapshot.get("session_id") or "unknown"
+    status = record.get("status") or snapshot.get("status") or "unknown"
+    goal = record.get("goal") or snapshot.get("goal") or "未记录"
+
+    table = Table(title="当前会话", show_header=False, box=None, pad_edge=False)
+    table.add_column(style="bold cyan", no_wrap=True)
+    table.add_column(overflow="fold")
+    table.add_row(Text("会话"), Text(_terminal_safe(session_id)))
+    table.add_row(Text("状态"), Text(_terminal_safe(_chat_status_label(status))))
+    table.add_row(Text("目标"), Text(_terminal_safe(goal)))
+    table.add_row(
+        Text("用量"),
+        Text(
+            _terminal_safe(
+                "轮次 {rounds}/{max_rounds} · 工具 {tools}/{max_tools} · Token {tokens}".format(
+                    rounds=usage.get("rounds", 0),
+                    max_rounds=budget.get("max_rounds", "-"),
+                    tools=usage.get("tool_calls", 0),
+                    max_tools=budget.get("max_tool_calls", "-"),
+                    tokens=usage.get("total_tokens", 0),
+                )
+            )
+        ),
+    )
+    next_action = snapshot.get("next_action")
+    if next_action and str(next_action) != "none":
+        table.add_row(Text("下一步"), Text(_terminal_safe(next_action)))
+    console.print(table)
+
+    blockers = snapshot.get("blockers", record.get("blockers", []))
+    if isinstance(blockers, list):
+        for blocker in blockers[-3:]:
+            console.print(_terminal_safe(f"原因：{blocker}"), style="yellow", markup=False)
+    console.print(
+        _terminal_safe(f"完整记录：astercode status --session {session_id}"),
+        style="dim",
+        markup=False,
+    )
 
 
 def _prompt_approval(request: Mapping[str, Any]) -> dict[str, Any] | None:
     risk = str(request.get("risk", "unknown"))
     console.print("\n[bold yellow]需要你的审批[/bold yellow]")
     console.print(
-        _terminal_safe(
-            f"风险：{risk}    工具：{request.get('tool')}    主机：{request.get('host', 'local')}"
-        ),
+        _terminal_safe(f"风险：{risk}    工具：{request.get('tool')}    主机：{request.get('host', 'local')}"),
         markup=False,
     )
     if request.get("cwd"):
@@ -721,10 +828,7 @@ def _prompt_approval(request: Mapping[str, Any]) -> dict[str, Any] | None:
             approved, scope = False, "once"
             break
         console.print("请输入 a、s、d 或 q。")
-    decision = {
-        key: request[key]
-        for key in ("approval_id", "action_id", "action_hash", "nonce")
-    }
+    decision = {key: request[key] for key in ("approval_id", "action_id", "action_hash", "nonce")}
     decision.update(
         approved=approved,
         scope=scope,
@@ -740,9 +844,7 @@ def _resume_chat_session(root: Path, session_id: str, decision: Mapping[str, Any
     cfg = _chat_config(root)
     storage = _storage(cfg)
     storage.initialize()
-    return _run_sync(
-        Orchestrator.resume_from_storage(cfg, storage, session_id, decision)
-    )
+    return _run_sync(Orchestrator.resume_from_storage(cfg, storage, session_id, decision))
 
 
 def _chat_session_status(root: Path, session_id: str) -> Mapping[str, Any]:
@@ -777,9 +879,7 @@ def chat(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), fake:
             missing.append(cfg.model.api_key_env)
         if missing:
             console.print(
-                _terminal_safe(
-                    "实时模型尚未就绪：缺少 " + ", ".join(missing)
-                ),
+                _terminal_safe("实时模型尚未就绪：缺少 " + ", ".join(missing)),
                 style="red",
                 markup=False,
             )
@@ -788,17 +888,12 @@ def chat(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), fake:
     console.print("工作区：", end="")
     console.print(_terminal_safe(root), style="bold", markup=False)
     console.print(
-        _terminal_safe(
-            f"授权范围：{', '.join(str(item) for item in cfg.security.authorized_roots)}"
-        ),
+        _terminal_safe(f"授权范围：{', '.join(str(item) for item in cfg.security.authorized_roots)}"),
         markup=False,
     )
     provider = "fake" if fake else cfg.model.provider
     console.print(
-        _terminal_safe(
-            f"模型：{provider}/{cfg.model.model_id or '未设置'}    "
-            f"Key：{'PRESENT' if key_present else 'UNSET'}"
-        ),
+        _terminal_safe(f"模型：{provider}/{cfg.model.model_id or '未设置'}    Key：{'PRESENT' if key_present else 'UNSET'}"),
         markup=False,
     )
     console.print("输入 /help 查看命令；输入 /exit 或按 Ctrl-C 退出。\n")
@@ -831,9 +926,7 @@ def chat(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), fake:
             if session_id is None:
                 console.print("当前还没有会话。")
             else:
-                console.print_json(
-                    json.dumps(_chat_session_status(root, session_id), ensure_ascii=False, default=str)
-                )
+                _print_chat_status(_chat_session_status(root, session_id))
             continue
         if lowered.startswith("/resume "):
             candidate = message.split(maxsplit=1)[1].strip()
@@ -911,7 +1004,9 @@ def resume(
     session_id: str,
     root: Path = typer.Option(Path.cwd(), "--root", file_okay=False),
     approve: bool = typer.Option(False, "--approve", help="Approve the exact persisted request"),
-    approve_session: bool = typer.Option(False, "--approve-session", help="Grant this exact P1/P2 action for the current session until expiry"),
+    approve_session: bool = typer.Option(
+        False, "--approve-session", help="Grant this exact P1/P2 action for the current session until expiry"
+    ),
     deny: bool = typer.Option(False, "--deny", help="Deny the exact persisted request"),
 ) -> None:
     """Resume a persisted session after an approval or crash checkpoint."""
@@ -938,23 +1033,30 @@ def resume(
 
 
 @app.command()
-def status(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), session_id: str | None = typer.Option(None, "--session")) -> None:
+def status(
+    root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), session_id: str | None = typer.Option(None, "--session")
+) -> None:
     """Show one session or the most recent persisted sessions."""
     cfg = _config(_root(root))
-    storage = _storage(cfg); storage.initialize()
+    storage = _storage(cfg)
+    storage.initialize()
     rows = storage.get_session(session_id) if session_id else storage.list_sessions(limit=20)
     console.print_json(json.dumps(rows, ensure_ascii=False, default=str))
 
 
 @sessions_app.command("list")
 def sessions_list(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), limit: int = typer.Option(20, min=1, max=100)) -> None:
-    cfg = _config(_root(root)); storage = _storage(cfg); storage.initialize()
+    cfg = _config(_root(root))
+    storage = _storage(cfg)
+    storage.initialize()
     console.print_json(json.dumps(storage.list_sessions(limit=limit), ensure_ascii=False, default=str))
 
 
 @sessions_app.command("show")
 def sessions_show(session_id: str, root: Path = typer.Option(Path.cwd(), "--root", file_okay=False)) -> None:
-    cfg = _config(_root(root)); storage = _storage(cfg); storage.initialize()
+    cfg = _config(_root(root))
+    storage = _storage(cfg)
+    storage.initialize()
     console.print_json(json.dumps(storage.get_session(session_id), ensure_ascii=False, default=str))
 
 
@@ -965,7 +1067,9 @@ def sessions_reconcile(
 ) -> None:
     """Read-only comparison of a crash-interrupted action and current state."""
 
-    cfg = _config(_root(root)); storage = _storage(cfg); storage.initialize()
+    cfg = _config(_root(root))
+    storage = _storage(cfg)
+    storage.initialize()
     from .runtime import Orchestrator
 
     result = Orchestrator(cfg, storage=storage).reconcile(session_id)
@@ -973,10 +1077,14 @@ def sessions_reconcile(
 
 
 @sessions_app.command("delete")
-def sessions_delete(session_id: str, root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), yes: bool = typer.Option(False, "--yes")) -> None:
+def sessions_delete(
+    session_id: str, root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), yes: bool = typer.Option(False, "--yes")
+) -> None:
     if not yes:
         raise typer.BadParameter("session deletion requires --yes")
-    cfg = _config(_root(root)); storage = _storage(cfg); storage.initialize()
+    cfg = _config(_root(root))
+    storage = _storage(cfg)
+    storage.initialize()
     storage.delete_session(session_id)
     typer.echo("已删除会话")
 
@@ -989,7 +1097,9 @@ def sessions_export(
     allow_outside_root: bool = typer.Option(False, "--allow-outside-root"),
     yes: bool = typer.Option(False, "--yes"),
 ) -> None:
-    cfg = _config(_root(root)); storage = _storage(cfg); storage.initialize()
+    cfg = _config(_root(root))
+    storage = _storage(cfg)
+    storage.initialize()
     output = _export_destination(output, cfg, allow_outside_root=allow_outside_root, yes=yes)
     _write_json_export(output, storage.export_session(session_id))
     typer.echo(str(output))
@@ -997,19 +1107,27 @@ def sessions_export(
 
 @memory_app.command("list")
 def memory_list(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), namespace: str | None = typer.Option(None)) -> None:
-    cfg = _config(_root(root)); storage = _storage(cfg); storage.initialize()
+    cfg = _config(_root(root))
+    storage = _storage(cfg)
+    storage.initialize()
     console.print_json(json.dumps(storage.list_memory(namespace=namespace), ensure_ascii=False, default=str))
 
 
 @memory_app.command("show")
 def memory_show(memory_id: str, root: Path = typer.Option(Path.cwd(), "--root", file_okay=False)) -> None:
-    cfg = _config(_root(root)); storage = _storage(cfg); storage.initialize()
+    cfg = _config(_root(root))
+    storage = _storage(cfg)
+    storage.initialize()
     console.print_json(json.dumps(storage.get_memory(memory_id), ensure_ascii=False, default=str))
 
 
 @memory_app.command("search")
-def memory_search(query: str, root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), namespace: str | None = typer.Option(None)) -> None:
-    cfg = _config(_root(root)); storage = _storage(cfg); storage.initialize()
+def memory_search(
+    query: str, root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), namespace: str | None = typer.Option(None)
+) -> None:
+    cfg = _config(_root(root))
+    storage = _storage(cfg)
+    storage.initialize()
     console.print_json(json.dumps(storage.search_memory(query, namespace=namespace), ensure_ascii=False, default=str))
 
 
@@ -1020,7 +1138,9 @@ def memory_export(
     allow_outside_root: bool = typer.Option(False, "--allow-outside-root"),
     yes: bool = typer.Option(False, "--yes"),
 ) -> None:
-    cfg = _config(_root(root)); storage = _storage(cfg); storage.initialize()
+    cfg = _config(_root(root))
+    storage = _storage(cfg)
+    storage.initialize()
     output = _export_destination(output, cfg, allow_outside_root=allow_outside_root, yes=yes)
     _write_json_export(output, storage.export_memory())
     typer.echo(str(output))
@@ -1028,12 +1148,23 @@ def memory_export(
 
 @memory_app.command("reindex")
 def memory_reindex(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False)) -> None:
-    cfg = _config(_root(root)); storage = _storage(cfg); storage.reindex_memory(); typer.echo("已重建记忆索引")
+    cfg = _config(_root(root))
+    storage = _storage(cfg)
+    storage.reindex_memory()
+    typer.echo("已重建记忆索引")
 
 
 @memory_app.command("propose")
-def memory_propose(content: str, namespace: str = "project", source: str = "user", ttl_days: int | None = None, root: Path = typer.Option(Path.cwd(), "--root", file_okay=False)) -> None:
-    cfg = _config(_root(root)); storage = _storage(cfg); storage.initialize()
+def memory_propose(
+    content: str,
+    namespace: str = "project",
+    source: str = "user",
+    ttl_days: int | None = None,
+    root: Path = typer.Option(Path.cwd(), "--root", file_okay=False),
+) -> None:
+    cfg = _config(_root(root))
+    storage = _storage(cfg)
+    storage.initialize()
     proposal = storage.propose_memory(content=content, namespace=namespace, source=source, ttl_days=ttl_days)
     console.print_json(json.dumps(proposal, ensure_ascii=False, default=str))
     typer.echo("未自动提交：请使用 memory commit <proposal_id> 明确确认。", err=True)
@@ -1041,7 +1172,9 @@ def memory_propose(content: str, namespace: str = "project", source: str = "user
 
 @memory_app.command("commit")
 def memory_commit(proposal_id: str, root: Path = typer.Option(Path.cwd(), "--root", file_okay=False)) -> None:
-    cfg = _config(_root(root)); storage = _storage(cfg); storage.initialize()
+    cfg = _config(_root(root))
+    storage = _storage(cfg)
+    storage.initialize()
     console.print_json(json.dumps(storage.commit_memory(proposal_id), ensure_ascii=False, default=str))
 
 
@@ -1054,7 +1187,9 @@ def memory_edit(
 ) -> None:
     """Propose an edit while preserving namespace, TTL and sensitivity."""
 
-    cfg = _config(_root(root)); storage = _storage(cfg); storage.initialize()
+    cfg = _config(_root(root))
+    storage = _storage(cfg)
+    storage.initialize()
     proposal = storage.propose_memory_edit(memory_id, content=content)
     result = storage.commit_memory(proposal["proposal_id"]) if yes else proposal
     console.print_json(json.dumps(result, ensure_ascii=False, default=str))
@@ -1066,27 +1201,43 @@ def memory_edit(
 def memory_conflicts(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False)) -> None:
     """List edit proposals rejected because their base memory changed."""
 
-    cfg = _config(_root(root)); storage = _storage(cfg); storage.initialize()
+    cfg = _config(_root(root))
+    storage = _storage(cfg)
+    storage.initialize()
     console.print_json(json.dumps(storage.list_memory_conflicts(), ensure_ascii=False, default=str))
 
 
 @memory_app.command("add")
-def memory_add(content: str, namespace: str = "project", source: str = "user", ttl_days: int | None = None, root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), yes: bool = typer.Option(False, "--yes")) -> None:
+def memory_add(
+    content: str,
+    namespace: str = "project",
+    source: str = "user",
+    ttl_days: int | None = None,
+    root: Path = typer.Option(Path.cwd(), "--root", file_okay=False),
+    yes: bool = typer.Option(False, "--yes"),
+) -> None:
     """Explicitly propose and commit one long-term memory entry."""
     if not yes:
         raise typer.BadParameter("memory add requires --yes because it persists long-term memory")
-    cfg = _config(_root(root)); storage = _storage(cfg); storage.initialize()
+    cfg = _config(_root(root))
+    storage = _storage(cfg)
+    storage.initialize()
     proposal = storage.propose_memory(content=content, namespace=namespace, source=source, ttl_days=ttl_days)
     console.print_json(json.dumps(storage.commit_memory(proposal["proposal_id"]), ensure_ascii=False, default=str))
 
 
 @memory_app.command("forget")
 def memory_forget(memory_id: str, root: Path = typer.Option(Path.cwd(), "--root", file_okay=False)) -> None:
-    cfg = _config(_root(root)); storage = _storage(cfg); storage.forget_memory(memory_id); typer.echo("已删除")
+    cfg = _config(_root(root))
+    storage = _storage(cfg)
+    storage.forget_memory(memory_id)
+    typer.echo("已删除")
 
 
 @config_app.command("show")
-def config_show(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), config_file: Path | None = typer.Option(None, "--file")) -> None:
+def config_show(
+    root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), config_file: Path | None = typer.Option(None, "--file")
+) -> None:
     cfg = _config(_root(root), config_file)
     data = cfg.model_dump(mode="json")
     data.setdefault("model", {}).pop("api_key", None)
@@ -1094,8 +1245,11 @@ def config_show(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False)
 
 
 @config_app.command("validate")
-def config_validate(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), config_file: Path | None = typer.Option(None, "--file")) -> None:
-    cfg = _config(_root(root), config_file); typer.echo(f"OK: {cfg.project_root}")
+def config_validate(
+    root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), config_file: Path | None = typer.Option(None, "--file")
+) -> None:
+    cfg = _config(_root(root), config_file)
+    typer.echo(f"OK: {cfg.project_root}")
 
 
 @config_app.command("migrate")
@@ -1137,13 +1291,29 @@ def config_migrate(
 @permissions_app.command("show")
 def permissions_show(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False)) -> None:
     cfg = _config(_root(root))
-    console.print_json(json.dumps({"P0": "read-only local", "P1": "workspace reversible write", "P2": "boundary/unsandboxed/installation", "P3": "external side effect", "P4": "high risk default deny", "network_mode": cfg.security.network_mode.value, "authorized_roots": [str(p) for p in cfg.security.authorized_roots], "authorized_ssh_hosts": [h.host_id for h in cfg.security.authorized_ssh_hosts]}, ensure_ascii=False))
+    console.print_json(
+        json.dumps(
+            {
+                "P0": "read-only local",
+                "P1": "workspace reversible write",
+                "P2": "boundary/unsandboxed/installation",
+                "P3": "external side effect",
+                "P4": "high risk default deny",
+                "network_mode": cfg.security.network_mode.value,
+                "authorized_roots": [str(p) for p in cfg.security.authorized_roots],
+                "authorized_ssh_hosts": [h.host_id for h in cfg.security.authorized_ssh_hosts],
+            },
+            ensure_ascii=False,
+        )
+    )
 
 
 @permissions_app.command("revoke")
 def permissions_revoke(approval_id: str, root: Path = typer.Option(Path.cwd(), "--root", file_okay=False)) -> None:
     """Revoke one persisted approval before it is consumed."""
-    cfg = _config(_root(root)); storage = _storage(cfg); storage.initialize()
+    cfg = _config(_root(root))
+    storage = _storage(cfg)
+    storage.initialize()
     console.print_json(json.dumps(storage.revoke_approval(approval_id), ensure_ascii=False, default=str))
 
 
@@ -1154,7 +1324,9 @@ def permissions_grants(
 ) -> None:
     """List exact, expiring session-scoped P1/P2 grants."""
 
-    cfg = _config(_root(root)); storage = _storage(cfg); storage.initialize()
+    cfg = _config(_root(root))
+    storage = _storage(cfg)
+    storage.initialize()
     console.print_json(json.dumps(storage.list_session_grants(session_id), ensure_ascii=False, default=str))
 
 
@@ -1165,7 +1337,9 @@ def permissions_revoke_grant(
 ) -> None:
     """Revoke one unexpired session-scoped grant."""
 
-    cfg = _config(_root(root)); storage = _storage(cfg); storage.initialize()
+    cfg = _config(_root(root))
+    storage = _storage(cfg)
+    storage.initialize()
     console.print_json(json.dumps(storage.revoke_session_grant(grant_id), ensure_ascii=False, default=str))
 
 
@@ -1173,7 +1347,9 @@ def permissions_revoke_grant(
 def audit_verify(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False)) -> None:
     """Verify the SQLite and JSONL audit hash chain without modifying it."""
 
-    cfg = _config(_root(root)); storage = _storage(cfg); storage.initialize()
+    cfg = _config(_root(root))
+    storage = _storage(cfg)
+    storage.initialize()
     result = storage.verify_audit_chain()
     console.print_json(json.dumps(result, ensure_ascii=False, default=str))
     if not result.get("valid"):
@@ -1193,14 +1369,15 @@ def audit_repair(
 
     if not confirm:
         console.print(
-            "Refusing to mutate audit evidence without --confirm. "
-            "Run `audit verify` first; repair only appends exact DB-backed records.",
+            "Refusing to mutate audit evidence without --confirm. Run `audit verify` first; repair only appends exact DB-backed records.",
             style="yellow",
         )
         raise typer.Exit(code=2)
     from .storage import AuditIntegrityError
 
-    cfg = _config(_root(root)); storage = _storage(cfg); storage.initialize()
+    cfg = _config(_root(root))
+    storage = _storage(cfg)
+    storage.initialize()
     try:
         repair = storage.repair_audit_mirror()
     except AuditIntegrityError as exc:
@@ -1221,7 +1398,13 @@ def audit_repair(
 @ssh_hosts_app.command("list")
 def ssh_hosts_list(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False)) -> None:
     cfg = _config(_root(root))
-    console.print_json(json.dumps([host.model_dump(mode="json") | {"fingerprint": "[configured]"} for host in cfg.security.authorized_ssh_hosts], ensure_ascii=False, default=str))
+    console.print_json(
+        json.dumps(
+            [host.model_dump(mode="json") | {"fingerprint": "[configured]"} for host in cfg.security.authorized_ssh_hosts],
+            ensure_ascii=False,
+            default=str,
+        )
+    )
 
 
 @ssh_hosts_app.command("test")
@@ -1238,9 +1421,12 @@ def ssh_hosts_test(host_id: str, root: Path = typer.Option(Path.cwd(), "--root",
 @app.command()
 def kill(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), clear: bool = typer.Option(False, "--clear")) -> None:
     """Engage or clear the process-independent kill switch."""
-    cfg = _config(_root(root)); storage = _storage(cfg); storage.initialize()
+    cfg = _config(_root(root))
+    storage = _storage(cfg)
+    storage.initialize()
     if clear:
-        storage.clear_kill_switch(); typer.echo("kill switch cleared")
+        storage.clear_kill_switch()
+        typer.echo("kill switch cleared")
     else:
         from .tools.docker_process import DockerProcessTools
         from .tools.process import ProcessTools
@@ -1254,11 +1440,7 @@ def kill(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), clear
             else:
                 expected = record.get("identity_token")
                 current = ProcessTools.process_identity(int(record["pid"]))
-                verified_stopped = current == "missing" or (
-                    isinstance(expected, str)
-                    and isinstance(current, str)
-                    and current != expected
-                )
+                verified_stopped = current == "missing" or (isinstance(expected, str) and isinstance(current, str) and current != expected)
                 if not verified_stopped:
                     verified_stopped = ProcessTools.terminate_registered(
                         int(record["pid"]),

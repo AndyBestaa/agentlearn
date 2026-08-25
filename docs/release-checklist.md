@@ -1,0 +1,128 @@
+# AsterCode 发布检查清单
+
+本清单用于准备作品集/简历演示版本。旧提交的测试数字和绿色 CI 不能自动继承到新提交；每条完成项都必须绑定目标 commit 和实际命令输出。
+
+## 1. 冻结范围
+
+- [ ] 明确目标：local-first 代码读取/修改/测试/diff + policy/approval/resume/audit + Docker 演示。
+- [ ] 真实 SSH、外网 Browser、GUI、生产 MCP/Plugin 隔离继续标记 `LIVE INTEGRATION NOT VERIFIED` 或 `BLOCKED`。
+- [ ] 不把 Fake adapter 结果写成真实连接，不把 Docker process 边界外推为 SSH/Browser egress。
+- [ ] 不在本轮顺带加入部署、push、远程写或生产凭据。
+
+## 2. 工作树与版本
+
+```powershell
+git status --short
+git diff --check
+git diff --stat
+uv lock --check
+```
+
+- [ ] 审阅所有未提交文件，确认没有覆盖用户无关修改。
+- [ ] `pyproject.toml`、包内版本、CHANGELOG 和计划发布名一致。
+- [ ] README 的证据数字注明目标 commit，不保留未确认的远端状态、旧失败或旧测试总数。
+- [ ] 不自动创建 tag/GitHub Release；只有用户明确批准后执行外部发布。
+
+## 3. 秘密与仓库卫生
+
+```powershell
+rg -n --hidden --glob '!.git/**' --glob '!uv.lock' '(sk-[A-Za-z0-9_-]{12,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|DEEPSEEK_API_KEY\s*=\s*[''"][^$])' .
+git status --ignored --short
+```
+
+- [ ] 仓库、fixture、日志和文档没有真实 API key、私钥、cookie、审批 nonce 或用户敏感路径数据。
+- [ ] `.astercode/`、临时 workspace、构建产物、wheelhouse 和真实 session 不进入提交。
+- [ ] 配置示例只写环境变量名或占位符。
+
+## 4. Windows 质量门
+
+```powershell
+uv sync --extra dev --extra browser --frozen
+uv run python -m compileall -q src tests scripts
+uv run pytest -q
+uv run ruff check .
+uv run mypy src tests
+uv lock --check
+uv pip check --python .venv\Scripts\python.exe
+uv build
+uv run python scripts/package_smoke.py
+```
+
+- [ ] 记录目标 commit、Python/Windows 版本、passed/skipped 数字和 skip 原因。
+- [ ] skipped 不计为通过能力。
+- [ ] PowerShell 7、Windows Job Object、symlink/junction/reparse 的平台测试按当前机器能力实际运行；未满足时明确记录。
+
+## 5. WSL/Linux 质量门
+
+在已有的独立 Python 3.12 WSL 环境中运行同一锁定依赖和完整测试：
+
+```bash
+uv sync --extra dev --extra browser --frozen
+uv run python -m compileall -q src tests scripts
+uv run pytest -q
+ASTERCODE_REQUIRE_LIVE_DOCKER=1 uv run pytest -q -rs tests/integration/test_docker_process_live.py
+uv run ruff check .
+uv run mypy src tests
+uv lock --check
+uv build
+uv run python scripts/package_smoke.py
+```
+
+- [ ] 记录 distro、Python、Docker engine、passed/skipped 和 live Docker 数字。
+- [ ] WSL + Docker Desktop 的结论不外推到裸机 Linux 或独立生产 daemon。
+
+## 6. 固定作品集 Demo
+
+```powershell
+uv run astercode doctor --root .
+uv run python scripts/resume_demo.py --backend docker --cleanup
+```
+
+- [ ] 终端实际输出 `AsterCode resume demo: PASS`。
+- [ ] baseline 是预期失败；最终测试输出为 `calculator regression: 3 checks passed`。
+- [ ] 工具链严格为 `fs.read → fs.read → fs.apply_patch → process.exec → git.diff → git.status`。
+- [ ] 只有一次精确 P3 `process.exec` 审批，并成功跨 checkpoint resume。
+- [ ] evidence JSON 报告 `execution_simulated=false`、Docker sandbox 元数据完整、audit valid。
+- [ ] Git diff 只有一个算术操作符修复，Git status 不包含测试文件变化。
+
+若只能运行 `--backend fake`，发布记录必须写明 simulated，且该项不能勾选为 Docker Demo 通过。
+
+## 7. 可选 live Provider smoke
+
+- [ ] 仅从当前用户环境/secret broker 读取 key；终端、日志和命令行不显示值。
+- [ ] 使用新建临时工作区、低预算任务、明确的无网络/不 push 范围。
+- [ ] 记录 Provider、模型、session、工具、审批、token（若 Provider 返回）、耗时和未验证项。
+- [ ] DeepSeek smoke 不替代 OpenAI smoke；没有 OpenAI 凭据时写 `LIVE OPENAI NOT VERIFIED`。
+- [ ] 不连接真实 SSH、生产服务或用户浏览器登录态。
+
+## 8. 供应链与文档
+
+- [ ] `doctor` 报告 Docker 固定镜像和 `cosign`/`syft`/`trivy` 可用性。
+- [ ] 固定 RepoDigest 只表示内容寻址，不单独宣称签名可信、SBOM 或漏洞扫描通过。
+- [ ] 若发布记录声称签名/SBOM/漏洞扫描，附实际命令、工具版本、离线/在线数据库状态和输出 artifact。
+- [ ] README、architecture、implementation-plan、threat-model、demo-guide、resume-project、CHANGELOG 相互一致。
+- [ ] README 中的安装、doctor、Demo、测试和 packaged CLI 命令均已在目标提交运行。
+
+## 9. GitHub 证据与发布
+
+- [ ] 推送目标 commit 后，等待 `.github/workflows/ci.yml` 的 Windows/Ubuntu jobs 完成。
+- [ ] Ubuntu required Docker regression 未被 skip；缺少镜像/attestation 时应使 job 失败。
+- [ ] CI badge 指向当前仓库和 `ci.yml`，README 记录的是目标 commit 而不是旧快照。
+- [ ] 审阅 GitHub diff，确认没有 secret、临时 artifact 或意外大文件。
+- [ ] 经用户明确批准后再创建 tag/Release；Release notes 列出 verified、simulated、blocked 和 known limitations。
+
+## 10. 发布证据模板
+
+```text
+target_commit: <sha>
+version: <version>
+windows: <passed/skipped + platform>
+wsl_linux: <passed/skipped + distro>
+github_actions: <run URL + Windows/Ubuntu result>
+lint_type_lock_build: <actual results>
+packaged_cli_smoke: <actual result>
+resume_demo_docker: <PASS/FAIL + evidence path>
+live_provider: <provider/model/session or NOT VERIFIED>
+live_ssh_browser_gui: NOT VERIFIED / BLOCKED
+known_risks: <remaining risks>
+```

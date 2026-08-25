@@ -13,7 +13,7 @@
 | M4 Memory/Recovery | partial but usable | SQLite WAL/FTS5、schema v8 migrations/backups、三层 memory、edit/conflict/supersedes、字段保留型 checkpoint compaction、跨进程审批恢复、process registry/read-only reconcile、Docker backend identity、stream/replay；所有写入前 schema preflight 拒绝 future/gap/伪造版本、缺表列和非 FTS5；POSIX zombie 不再误报为可恢复进程 | 任意外部副作用的自动回滚、远程 reconcile、跨重启 POSIX 进程组回收的 live 证明 |
 | M5 SSH/SFTP | transport slice, live blocked | Fake SSH 全契约；默认关闭的系统 OpenSSH 命令通道；固定系统路径和结构化 argv；严格专用 known_hosts 与派生指纹一致性；agent/keychain-only；禁用密码、代理、转发、X11、复用；allowlist/网络证明双门槛；远端停止 unknown | 可信 SSH egress allowlist、首次指纹登记、真实主机、SFTP、远程 PID、备份/原子替换/回滚和现场验证 |
 | M6 Browser/MCP/Plugin/Subagent/GUI | offline complete, engine slice verified | Fake Browser/MCP/Plugin；可选 Playwright + Edge 非持久化只读 context；每请求 allowlist/DNS/重定向检查；`about:blank` 零页面网络 smoke；Draft 2020-12 严格 schema；只读子代理双开关、原子父子预算 reservation/usage 合并、跨重启全额保守恢复、grant/parent/all 定向取消 | 浏览器 OS egress、外网导航/下载/提交仍 blocked；子代理仍同进程且 live delegation blocked；真实 MCP/plugin 隔离、GUI、生产调度 |
-| M7 跨平台/发布 | partial | wheel、安装 smoke、README、配置和迁移备份、审计 verify、回归 fixture、Git Bash 兼容 smoke、本地性能基线；真实 Windows Ctrl-Break、审批恢复取消、宿主崩溃 Job 清理均已回归；WSL2 Ubuntu 中 Python 3.12、bash、Docker Desktop Linux engine 与全量测试通过 | 裸机 Linux/独立 daemon、PowerShell 7 shell adapter、更多 live 集成矩阵 |
+| M7 跨平台/发布 | partial, resume-demo ready | wheel、安装 smoke、README、配置和迁移备份、审计 verify、回归 fixture、Git Bash 兼容 smoke、本地性能基线；真实 Windows Ctrl-Break、审批恢复取消、宿主崩溃 Job 清理均已回归；WSL2 Ubuntu 中 Python 3.12、bash、Docker Desktop Linux engine 与全量测试通过；提交 `0ff88d3` 的 GitHub Actions Windows/Ubuntu jobs 通过；新增固定简历演示入口和发布清单 | 当前工作树最终回归与版本证据刷新、裸机 Linux/独立 daemon、更多 live 集成矩阵 |
 
 ## 已完成的离线垂直链路
 
@@ -39,6 +39,17 @@
 18. OpenAI/DeepSeek endpoint 固定且 `trust_env=false`；Provider/tool 使用剩余时长与输出预算，未知费用 fail-closed，输入 token 响应后核对。
 19. Git P0 禁外部驱动/hook/fsmonitor/attrs 和 lazy fetch；通用 process/shell 不能绕过 Git/SSH/network/delete；artifact 对未保留后缀明确不完整。
 20. 离线只读子代理实时刷新父 usage、原子预扣并合并 child usage，重启对未结算额度保守全扣，支持定向取消和双开关；同进程/live 边界不变。
+
+## 当前交付目标：可写进简历并现场演示
+
+当前优先级不是扩张到生产 SSH、外网浏览器或原生 GUI，而是把已经存在的本地能力收敛成可重复、可解释、可核验的作品集切片：
+
+1. `scripts/resume_demo.py --backend docker --cleanup` 从全新 fixture 出发，先证明测试失败，再完成读取、诊断、最小 patch、一次精确 P3 审批与跨 checkpoint resume、Docker 测试、Git diff/status 和审计链验证。
+2. deterministic Provider 只固定决策，不伪造工具结果；默认 Docker backend 必须实际通过 attestation 和执行证据。`--backend fake` 在输出中明确标注 simulated。
+3. README、架构图、演示讲稿、简历 bullet 和发布清单使用同一 verified/blocked 口径。
+4. 发布候选必须在目标提交重跑 Windows、WSL、GitHub Actions、lint、mypy、lock、build、packaged CLI smoke 和固定 Demo；旧提交的数字不能作为新提交证据。
+
+完成以上四项即可支持“local-first、policy-controlled coding agent”的简历表述与现场演示；真实 SSH、外网浏览器、生产部署和原生 GUI 仍属于后续扩展，不是该作品集目标的完成门槛。
 
 ## 2026-08-23 现场验证（范围有限）
 
@@ -73,8 +84,7 @@
 - 将 Fake SSH/Browser/MCP/Plugin/Subagent 测试纳入固定 CI 命令；所有 fixture 保证无网络和无秘密。
 - 配置迁移、memory conflict/poisoning、audit tamper detection 的主要文档与回归已完成；后续仅维护迁移兼容性和更多损坏数据库 fixture。
 - WSL2 Ubuntu 已用独立 Linux venv 跑通全量 `pytest`，其中包含 6 项真实 Docker/bash 沙箱测试；这证明 WSL Ubuntu + Docker Desktop Linux engine 组合，不等同于裸机 Linux、独立生产 daemon 或通用网络出口验收。
-- GitHub Actions Ubuntu job 已配置固定摘要镜像拉取和强制 live Docker 回归；`ASTERCODE_REQUIRE_LIVE_DOCKER=1` 会把缺失 attestation 从 skip 提升为失败。本机 Windows/WSL 强制模式均为 `6 passed`，但远端 Runner 只有推送后才能形成实际证据。
-- 首次运行该 job 时发现 Ubuntu mypy 无法静态解析 Windows 专属 `CTRL_BREAK_EVENT`；已改为受保护的跨平台属性读取，并在 Windows/WSL 定向测试及带 browser extra 的 WSL mypy 中复核。新的远端 CI 结果需等待下一次推送。
+- GitHub Actions Ubuntu job 已配置固定摘要镜像拉取和强制 live Docker 回归；`ASTERCODE_REQUIRE_LIVE_DOCKER=1` 会把缺失 attestation 从 skip 提升为失败。首次运行暴露的 Ubuntu `CTRL_BREAK_EVENT` mypy 回归已修复；提交 `0ff88d3` 的远端 Windows/Ubuntu jobs 已通过。后续提交必须重新等待对应 workflow 结论，不能沿用该提交的证据。
 
 ### B. 具备独立安全证据后再做 live adapter
 
@@ -88,7 +98,7 @@
 
 ## 每次阶段验收命令
 
-本轮最终全量回归为 `401 passed, 10 skipped`。新增回归覆盖受控产物导出、构建进程无法直接写导出目录、Fake 模型→精确审批→Docker 导出完整链路，以及审批恢复期间取消长任务后的进程树清理。最新真实 DeepSeek 非 Git 对话回归 session `session_c004966b009d4c479562b714e0d3c56a` 完成 7 个用户回合、6 次 consumed 单次审批、7 次工具调用和 6 次实际副作用，最终文件不存在；空 path 只读现场复测 session `session_0925077d608240018fdb47a936e29a8a` 也为 completed；内联代码恢复 session `session_038b35bb629348e4aa6f9ce66d30063e` 验证拒绝 `python -c` 后自动改用工作区文件并在 Docker sandbox 输出 `5`。本地 sessions `session_7d900a2b47fa47fabebcaf7f4752ba6a`、`session_39f6d00411c04cfb818d68768f36d7e4`、`session_6ca9afec1f89409c9a7efcd582f9b09b`、`session_64c92f4347234e82a332072a5eecfce1` 进一步覆盖纯聊天状态、双循环代码工作、Docker 执行与上下文解释、审批报告、缺失路径观察和拒绝后上下文隔离。另有历史本机 Edge 离线 smoke `1 passed, 5 deselected`。10 个 skip 保持为未满足的平台/权限或 live 条件，不计入已完成能力。
+提交 `0ff88d3` 的远端 GitHub Actions Windows/Ubuntu jobs 已通过。2026-08-25 当前本地发布候选已刷新为 Windows 11 `431 passed, 5 skipped`、WSL2 Ubuntu `417 passed, 19 skipped`，并在 WSL 以强制 live 条件确认 Docker 回归 `6 passed`；每个候选提交仍以其对应的远端 CI 结果为最终依据。skip 继续表示未满足的平台/权限或 live 条件，不计入已完成能力。现场 DeepSeek sessions 是有限范围的兼容性证据，不替代 deterministic Demo 或完整回归。
 
 ```powershell
 uv run astercode doctor --root .
@@ -99,12 +109,15 @@ uv run pytest -q
 uv run ruff check src tests
 uv run mypy src tests
 uv lock --check
+uv build
+uv run python scripts/package_smoke.py
+uv run python scripts/resume_demo.py --backend docker --cleanup
 ```
 
 真实集成缺少凭据时，验收报告必须写 `LIVE INTEGRATION NOT VERIFIED`，不能把 fake/replay 的通过结果写成真实连接成功。
 
 ## 暂不做的事情
 
-2026-08-25 当前快照：开启开发者模式后的 Windows 11 全量为 `418 passed, 6 skipped`；WSL2 Ubuntu 全量为 `407 passed, 17 skipped`，后者包含 6 项真实 Docker 沙箱测试。两边的 skip 均是平台或显式 live 条件，不计为能力通过。`ruff check .`、`mypy src tests`、`uv lock --check`、wheel/sdist 构建和隔离环境 packaged CLI smoke 同时通过。
+2026-08-25 当前本地发布候选：Windows 11 全量为 `431 passed, 5 skipped`；WSL2 Ubuntu 全量为 `417 passed, 19 skipped`，并单独设置 `ASTERCODE_REQUIRE_LIVE_DOCKER=1` 确认 6 项真实 Docker 沙箱测试全部通过。两边的 skip 均是平台或显式 live 条件，不计为能力通过。`ruff check .`、`mypy src tests`、`uv lock --check`、wheel/sdist 构建和隔离环境 packaged CLI smoke 同时通过；真实 DeepSeek 同会话 7 turn、6 次精确审批、两轮文件 create/modify/delete 回归也已通过。
 
 不自动 commit、push、发布、部署、连接生产主机或索取私钥/API key；不通过关闭安全策略来“解锁”未完成能力。任何 required-path 能力若没有可强制执行的宿主边界，就保持 `BLOCKED`。

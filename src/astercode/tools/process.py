@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -22,6 +23,184 @@ from .base import ToolResult, ToolSpec, new_action_id, timed_result
 
 class UnsandboxedExecutionBlocked(RuntimeError):
     """Raised when the host cannot enforce the configured network boundary."""
+
+
+_STORE_POWERSHELL_PACKAGE = re.compile(
+    r"^Microsoft\.PowerShell_(\d+(?:\.\d+){1,3})_(?:x64|arm64)__8wekyb3d8bbwe$",
+    re.IGNORECASE,
+)
+
+
+def _path_has_reparse_point(path: Path) -> bool:
+    """Return whether *path* itself is a link/reparse point.
+
+    ``Path.is_symlink`` does not identify Windows junctions and other reparse
+    points on every supported Python version.  ``st_file_attributes`` is
+    available on Windows and is harmlessly absent on POSIX.
+    """
+
+    if path.is_symlink() or bool(getattr(path, "is_junction", lambda: False)()):
+        return True
+    try:
+        attributes = int(getattr(path.stat(follow_symlinks=False), "st_file_attributes", 0))
+    except (FileNotFoundError, OSError, ValueError):
+        return False
+    return bool(attributes & 0x400)  # FILE_ATTRIBUTE_REPARSE_POINT
+
+
+def _validate_trusted_powershell7_candidate(candidate: Path, windows_apps_root: Path) -> Path | None:
+    """Validate a PowerShell Store executable without trusting PATH.
+
+    The package identity and publisher suffix are checked in addition to the
+    fixed ``WindowsApps`` location.  This prevents a repository executable or
+    an arbitrary PATH shim from becoming a shell interpreter.
+    """
+
+    try:
+        resolved = candidate.resolve(strict=True)
+    except (FileNotFoundError, OSError, RuntimeError):
+        return None
+    # Standard users can execute registered Store applications but Windows
+    # denies enumerating/resolving the protected WindowsApps directory itself.
+    # Keep that fixed root lexical; resolving the concrete candidate still
+    # exposes any redirect before the containment check below.
+    root = Path(os.path.abspath(windows_apps_root))
+    if not root.is_dir():
+        return None
+    if not resolved.is_file() or resolved.name.casefold() != "pwsh.exe":
+        return None
+    try:
+        relative = resolved.relative_to(root)
+    except ValueError:
+        return None
+    if len(relative.parts) != 2 or relative.parts[1].casefold() != "pwsh.exe":
+        return None
+    if _STORE_POWERSHELL_PACKAGE.fullmatch(relative.parts[0]) is None:
+        return None
+    # Do not follow a link/reparse point while accepting the executable.
+    if _path_has_reparse_point(root):
+        return None
+    for part_count in (1, 2):
+        current = root.joinpath(*relative.parts[:part_count])
+        if _path_has_reparse_point(current):
+            return None
+    return resolved
+
+
+def _windows_system_locations() -> tuple[Path, Path] | None:
+    """Return Program Files and Windows directories from OS APIs, not env."""
+
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+
+        windll = getattr(ctypes, "windll", None)
+        if windll is None:
+            return None
+        windows_buffer = ctypes.create_unicode_buffer(32_768)
+        length = windll.kernel32.GetWindowsDirectoryW(windows_buffer, len(windows_buffer))
+        if not isinstance(length, int) or length <= 0 or length >= len(windows_buffer):
+            return None
+        program_files_buffer = ctypes.create_unicode_buffer(32_768)
+        # CSIDL_PROGRAM_FILES is resolved by the shell for the native process
+        # architecture and cannot be redirected through inherited env vars.
+        hresult = windll.shell32.SHGetFolderPathW(None, 0x0026, None, 0, program_files_buffer)
+        if hresult != 0:
+            return None
+        program_files = Path(program_files_buffer.value)
+        windows = Path(windows_buffer.value)
+        if not program_files.is_absolute() or not windows.is_absolute():
+            return None
+        return program_files, windows
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def discover_trusted_powershell7() -> Path | None:
+    """Discover a trusted PowerShell 7 executable on Windows.
+
+    Classic MSI/winget installs use a fixed path.  Microsoft Store installs do
+    not put ``pwsh.exe`` in the sanitized PATH, so query the package manager
+    through the fixed, inbox Windows PowerShell executable and validate the
+    returned package identity before using it.  No user PATH or app-execution
+    alias is consulted.
+    """
+
+    locations = _windows_system_locations()
+    if locations is None:
+        return None
+    program_files, system_root = locations
+    classic = program_files / "PowerShell" / "7" / "pwsh.exe"
+    try:
+        resolved_classic = classic.resolve(strict=True)
+    except (FileNotFoundError, OSError, RuntimeError):
+        resolved_classic = None
+    if resolved_classic is not None and resolved_classic.is_file():
+        lexical_classic = Path(os.path.abspath(classic))
+        classic_components = (
+            program_files / "PowerShell",
+            program_files / "PowerShell" / "7",
+            classic,
+        )
+        if resolved_classic == lexical_classic and not any(_path_has_reparse_point(item) for item in classic_components):
+            return resolved_classic
+
+    inbox_powershell = system_root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    try:
+        resolved_inbox = inbox_powershell.resolve(strict=True)
+    except (FileNotFoundError, OSError, RuntimeError):
+        return None
+    if not resolved_inbox.is_file() or resolved_inbox != Path(os.path.abspath(inbox_powershell)) or _path_has_reparse_point(resolved_inbox):
+        return None
+    query = "Get-AppxPackage -Name Microsoft.PowerShell | Select-Object -ExpandProperty InstallLocation"
+    query_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key in {"WINDIR", "TEMP", "TMP", "PATHEXT", "COMSPEC", "USERPROFILE", "LOCALAPPDATA", "APPDATA"}
+    }
+    query_env.update(
+        {
+            "SystemRoot": str(system_root),
+            "WINDIR": str(system_root),
+            "PATH": str(system_root / "System32"),
+            "PSModulePath": str(system_root / "System32" / "WindowsPowerShell" / "v1.0" / "Modules"),
+        }
+    )
+    try:
+        completed = subprocess.run(
+            [str(resolved_inbox), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", query],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=10,
+            env=query_env,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    windows_apps = program_files / "WindowsApps"
+    candidates: list[Path] = []
+    for line in completed.stdout.splitlines():
+        location = line.strip()
+        if not location or "\x00" in location:
+            continue
+        validated = _validate_trusted_powershell7_candidate(Path(location) / "pwsh.exe", windows_apps)
+        if validated is not None:
+            candidates.append(validated)
+
+    # Package-manager output is not a security decision; choose the highest
+    # numeric package version deterministically after identity validation.
+    def version_key(path: Path) -> tuple[int, ...]:
+        match = _STORE_POWERSHELL_PACKAGE.fullmatch(path.parent.name)
+        return tuple(int(part) for part in match.group(1).split(".")) if match else ()
+
+    return max(candidates, key=version_key, default=None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,26 +245,18 @@ class _BoundedPipeCapture:
     def _drain(self) -> None:
         binary_stream = getattr(self._stream, "buffer", None)
         read_candidate = getattr(binary_stream, "read1", None)
-        read_available = (
-            cast(Callable[[int], bytes], read_candidate)
-            if callable(read_candidate)
-            else None
-        )
+        read_available = cast(Callable[[int], bytes], read_candidate) if callable(read_candidate) else None
         decoder = None
         if callable(read_available):
             import codecs
 
-            decoder = codecs.getincrementaldecoder(self._encoding)(
-                errors=self._errors
-            )
+            decoder = codecs.getincrementaldecoder(self._encoding)(errors=self._errors)
         try:
             while True:
                 eof = False
                 if decoder is None:
                     chunk = self._stream.read(self._READ_CHARS)
-                    observed_bytes = len(
-                        chunk.encode(self._encoding, errors=self._errors)
-                    )
+                    observed_bytes = len(chunk.encode(self._encoding, errors=self._errors))
                 else:
                     assert read_available is not None
                     raw = read_available(self._READ_CHARS)
@@ -102,9 +273,7 @@ class _BoundedPipeCapture:
                         kept = chunk[:remaining]
                         self._chunks.append(kept)
                         self._retained_chars += len(kept)
-                        self._retained_bytes += len(
-                            kept.encode(self._encoding, errors=self._errors)
-                        )
+                        self._retained_bytes += len(kept.encode(self._encoding, errors=self._errors))
                     if len(chunk) > max(0, remaining):
                         self._truncated = True
                 if eof:
@@ -170,12 +339,100 @@ class _ProcessCapture:
 
 class ProcessTools:
     specs: tuple[ToolSpec, ...] = (
-        ToolSpec("process.exec", "Execute a structured argv in an authorized cwd. Run reviewed workspace files such as ['python', 'add.py']; never use inline interpreter flags such as python -c, node -e, or ruby -e.", "process.exec", ("process_start",), "P2", timeout_seconds=120, idempotent=False, schema={"type": "object", "properties": {"argv": {"type": "array", "items": {"type": "string"}}, "cwd": {"type": "string"}, "timeout": {"type": "number", "minimum": 0.1}}, "required": ["argv", "cwd", "timeout"], "additionalProperties": False}),
-        ToolSpec("shell.exec", "Execute a shell script only after explicit unsandboxed approval.", "process.shell", ("process_start",), "P2", timeout_seconds=120, idempotent=False, schema={"type": "object", "properties": {"script": {"type": "string"}, "dialect": {"type": "string", "enum": ["powershell", "pwsh", "bash"]}, "cwd": {"type": "string"}, "timeout": {"type": "number", "minimum": 0.1}}, "required": ["script", "dialect", "cwd", "timeout"], "additionalProperties": False}),
-        ToolSpec("process.start", "Start an approved long-running argv and return a process handle.", "process.start", ("process_start",), "P2", timeout_seconds=30, idempotent=False, schema={"type": "object", "properties": {"argv": {"type": "array", "items": {"type": "string"}}, "cwd": {"type": "string"}}, "required": ["argv", "cwd"], "additionalProperties": False}),
-        ToolSpec("process.poll", "Poll a process handle created by this agent.", "process.read", max_output=8_000, schema={"type": "object", "properties": {"action_id": {"type": "string"}}, "required": ["action_id"], "additionalProperties": False}),
-        ToolSpec("process.send_input", "Send bounded stdin to a process created by this agent.", "process.write", ("process_input",), "P2", idempotent=False, schema={"type": "object", "properties": {"action_id": {"type": "string"}, "input": {"type": "string", "maxLength": 16_384}}, "required": ["action_id", "input"], "additionalProperties": False}),
-        ToolSpec("process.stop", "Stop a process tree created by this agent.", "process.stop", ("process_stop",), "P2", idempotent=False, schema={"type": "object", "properties": {"action_id": {"type": "string"}}, "required": ["action_id"], "additionalProperties": False}),
+        ToolSpec(
+            "process.exec",
+            "Execute a structured argv in an authorized cwd. Run reviewed workspace files such as ['python', 'add.py']; never use inline interpreter flags such as python -c, node -e, or ruby -e.",
+            "process.exec",
+            ("process_start",),
+            "P2",
+            timeout_seconds=120,
+            idempotent=False,
+            schema={
+                "type": "object",
+                "properties": {
+                    "argv": {"type": "array", "items": {"type": "string"}},
+                    "cwd": {"type": "string"},
+                    "timeout": {"type": "number", "minimum": 0.1},
+                },
+                "required": ["argv", "cwd", "timeout"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolSpec(
+            "shell.exec",
+            "Execute a shell script only after explicit unsandboxed approval.",
+            "process.shell",
+            ("process_start",),
+            "P2",
+            timeout_seconds=120,
+            idempotent=False,
+            schema={
+                "type": "object",
+                "properties": {
+                    "script": {"type": "string"},
+                    "dialect": {"type": "string", "enum": ["powershell", "pwsh", "bash"]},
+                    "cwd": {"type": "string"},
+                    "timeout": {"type": "number", "minimum": 0.1},
+                },
+                "required": ["script", "dialect", "cwd", "timeout"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolSpec(
+            "process.start",
+            "Start an approved long-running argv and return a process handle.",
+            "process.start",
+            ("process_start",),
+            "P2",
+            timeout_seconds=30,
+            idempotent=False,
+            schema={
+                "type": "object",
+                "properties": {"argv": {"type": "array", "items": {"type": "string"}}, "cwd": {"type": "string"}},
+                "required": ["argv", "cwd"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolSpec(
+            "process.poll",
+            "Poll a process handle created by this agent.",
+            "process.read",
+            max_output=8_000,
+            schema={
+                "type": "object",
+                "properties": {"action_id": {"type": "string"}},
+                "required": ["action_id"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolSpec(
+            "process.send_input",
+            "Send bounded stdin to a process created by this agent.",
+            "process.write",
+            ("process_input",),
+            "P2",
+            idempotent=False,
+            schema={
+                "type": "object",
+                "properties": {"action_id": {"type": "string"}, "input": {"type": "string", "maxLength": 16_384}},
+                "required": ["action_id", "input"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolSpec(
+            "process.stop",
+            "Stop a process tree created by this agent.",
+            "process.stop",
+            ("process_stop",),
+            "P2",
+            idempotent=False,
+            schema={
+                "type": "object",
+                "properties": {"action_id": {"type": "string"}},
+                "required": ["action_id"],
+                "additionalProperties": False,
+            },
+        ),
     )
 
     def __init__(
@@ -218,9 +475,7 @@ class ProcessTools:
         if not allow_unsandboxed:
             raise UnsandboxedExecutionBlocked("no verified process sandbox is available; explicit P2 approval is required")
         if not self.sandbox_enforced:
-            raise UnsandboxedExecutionBlocked(
-                "no verified process sandbox is available; approval cannot replace an OS-enforced boundary"
-            )
+            raise UnsandboxedExecutionBlocked("no verified process sandbox is available; approval cannot replace an OS-enforced boundary")
         if not self.network_policy_enforced:
             raise UnsandboxedExecutionBlocked(
                 f"configured network mode {self.network_mode!r} has no verified process enforcement; "
@@ -286,13 +541,9 @@ class ProcessTools:
                         job_cpu_time_limit_seconds=self.max_cpu_time_seconds,
                     )
                 )
-                new_process_group = vars(subprocess).get(
-                    "CREATE_NEW_PROCESS_GROUP"
-                )
+                new_process_group = vars(subprocess).get("CREATE_NEW_PROCESS_GROUP")
                 if not isinstance(new_process_group, int):
-                    raise UnsandboxedExecutionBlocked(
-                        "Windows process-group support is unavailable"
-                    )
+                    raise UnsandboxedExecutionBlocked("Windows process-group support is unavailable")
                 creationflags = new_process_group | CREATE_SUSPENDED
             try:
                 proc = subprocess.Popen(
@@ -331,9 +582,7 @@ class ProcessTools:
                             self._windows_jobs[process_handle] = job
                             self._starting_handles.discard(process_handle)
                         registered = True
-                        raise RuntimeError(
-                            "Windows Job assignment failed and suspended-process cleanup is unconfirmed"
-                        ) from None
+                        raise RuntimeError("Windows Job assignment failed and suspended-process cleanup is unconfirmed") from None
                     self._close_pipes(proc)
                     job.close()
                     raise
@@ -349,9 +598,7 @@ class ProcessTools:
                 with self._state_lock:
                     self._starting_handles.discard(process_handle)
 
-    def _begin_capture(
-        self, process_handle: str, proc: subprocess.Popen[str]
-    ) -> _ProcessCapture:
+    def _begin_capture(self, process_handle: str, proc: subprocess.Popen[str]) -> _ProcessCapture:
         capture = _ProcessCapture(proc, self.max_output, process_handle)
         with self._state_lock:
             if self._children.get(process_handle) is not proc:
@@ -451,7 +698,9 @@ class ProcessTools:
             "complete": capture_complete,
         }
 
-    def exec(self, argv: list[str], cwd: str, timeout: float = 120, *, allow_unsandboxed: bool = False, env_refs: Mapping[str, str] | None = None) -> ToolResult:
+    def exec(
+        self, argv: list[str], cwd: str, timeout: float = 120, *, allow_unsandboxed: bool = False, env_refs: Mapping[str, str] | None = None
+    ) -> ToolResult:
         args = {"argv": argv, "cwd": cwd, "timeout": timeout}
         action_id = new_action_id("process.exec", args)
         result = timed_result("process.exec", action_id, cwd)
@@ -489,9 +738,7 @@ class ProcessTools:
                 terminated = self._terminate(process_handle, proc)
                 capture.wait(1.0)
                 result.status = "unknown"
-                result.error = (
-                    f"timeout after {timeout}s; side effect state requires reconcile"
-                )
+                result.error = f"timeout after {timeout}s; side effect state requires reconcile"
                 result.metadata["process_tree_stop_confirmed"] = terminated
             else:
                 # The root may exit while a descendant keeps an inherited
@@ -504,9 +751,7 @@ class ProcessTools:
                     result.metadata["process_tree_stop_confirmed"] = terminated
                     if not terminated:
                         result.status = "unknown"
-                        result.error = (
-                            "root process exited but descendant cleanup could not be confirmed"
-                        )
+                        result.error = "root process exited but descendant cleanup could not be confirmed"
         except UnsandboxedExecutionBlocked as exc:
             result.status, result.error = "failed", str(exc)
             result.metadata["blocked"] = True
@@ -525,9 +770,7 @@ class ProcessTools:
                 result.metadata["process_tree_stop_confirmed"] = confirmed
                 if not confirmed:
                     result.status = "unknown"
-                    result.error = (
-                        f"{result.error}; failed-process cleanup could not be confirmed"
-                    )
+                    result.error = f"{result.error}; failed-process cleanup could not be confirmed"
         finally:
             proc = proc or self._managed_child(process_handle)
             if proc is not None and self._managed_child(process_handle) is proc:
@@ -546,22 +789,24 @@ class ProcessTools:
             # Do not weaken the host execution policy.  ``-NoProfile`` and
             # ``-NonInteractive`` keep the invocation deterministic; the
             # machine/user policy remains authoritative.
-            safe_path = self._clean_env({})["PATH"]
-            executable = shutil.which("pwsh", path=safe_path)
-            if executable is None and dialect == "powershell":
-                executable = shutil.which("powershell.exe", path=safe_path)
-            if executable is None:
+            powershell_executable = discover_trusted_powershell7()
+            if powershell_executable is None and dialect == "powershell":
+                safe_path = self._clean_env({})["PATH"]
+                powershell_executable = Path(shutil.which("powershell.exe", path=safe_path) or "")
+                if not powershell_executable.is_file():
+                    powershell_executable = None
+            if powershell_executable is None:
                 result = timed_result("shell.exec", new_action_id("shell.exec", {"script": script, "dialect": dialect, "cwd": cwd}), cwd)
                 result.status, result.error = "failed", "PowerShell executable is not available in the sanitized PATH"
                 return result.finish()
-            argv = [executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script]
+            argv = [str(powershell_executable), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script]
         else:
-            executable = shutil.which("bash", path=self._clean_env({})["PATH"])
-            if executable is None:
+            bash_executable = shutil.which("bash", path=self._clean_env({})["PATH"])
+            if bash_executable is None:
                 result = timed_result("shell.exec", new_action_id("shell.exec", {"script": script, "dialect": dialect, "cwd": cwd}), cwd)
                 result.status, result.error = "failed", "bash executable is not available in the sanitized PATH"
                 return result.finish()
-            argv = [executable, "--noprofile", "--norc", "-c", script]
+            argv = [bash_executable, "--noprofile", "--norc", "-c", script]
         result = self.exec(argv, cwd, timeout, allow_unsandboxed=allow_unsandboxed)
         result.tool = "shell.exec"
         return result
@@ -609,9 +854,7 @@ class ProcessTools:
                 result.metadata["process_tree_stop_confirmed"] = confirmed
                 if not confirmed:
                     result.status = "unknown"
-                    result.error = (
-                        f"{result.error}; failed-process cleanup could not be confirmed"
-                    )
+                    result.error = f"{result.error}; failed-process cleanup could not be confirmed"
                 self._release_action(process_handle, proc)
         return result.finish()
 
@@ -636,9 +879,7 @@ class ProcessTools:
                     result.metadata["process_tree_stop_confirmed"] = terminated
                     if not terminated:
                         result.status = "unknown"
-                        result.error = (
-                            "root process exited but descendant cleanup could not be confirmed"
-                        )
+                        result.error = "root process exited but descendant cleanup could not be confirmed"
                 released_capture = self._release_action(action_id, proc)
                 capture = capture or released_capture
             if capture is not None:
@@ -740,9 +981,7 @@ class ProcessTools:
                 )
                 if not ok:
                     return None
-                exit_value = (int(exit_time.dwHighDateTime) << 32) | int(
-                    exit_time.dwLowDateTime
-                )
+                exit_value = (int(exit_time.dwHighDateTime) << 32) | int(exit_time.dwLowDateTime)
                 if exit_value != 0:
                     # A terminated child can remain queryable until its parent
                     # closes/reaps the process handle.  It is no longer a live
@@ -774,9 +1013,7 @@ class ProcessTools:
     def _run_windows_taskkill(pid: int) -> subprocess.CompletedProcess[str] | None:
         """Use the pinned System32 binary with a bounded, sanitized launch."""
 
-        system_root = Path(
-            os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
-        )
+        system_root = Path(os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows")
         executable = (system_root / "System32" / "taskkill.exe").resolve()
         if not executable.is_file():
             return None
@@ -859,7 +1096,15 @@ class ProcessTools:
         for key, reference in env_refs.items():
             if not key or "=" in key or "\x00" in key or "\x00" in reference:
                 raise ValueError("invalid environment reference")
-            if key.endswith("_API_KEY") or "TOKEN" in key.upper() or "PASSWORD" in key.upper() or "SECRET" in key.upper() or "TOKEN" in reference.upper() or "PASSWORD" in reference.upper() or "SECRET" in reference.upper():
+            if (
+                key.endswith("_API_KEY")
+                or "TOKEN" in key.upper()
+                or "PASSWORD" in key.upper()
+                or "SECRET" in key.upper()
+                or "TOKEN" in reference.upper()
+                or "PASSWORD" in reference.upper()
+                or "SECRET" in reference.upper()
+            ):
                 raise PermissionError("secret-valued environment variables must use a secret broker")
             if reference not in os.environ:
                 raise PermissionError("environment values must be resolved by a secret broker reference")

@@ -28,11 +28,7 @@ def _approval_request(root: Path) -> dict[str, Any]:
         "cwd": str(root),
         "real_paths": [str(root / "hello.py")],
         "side_effects": ["file_write"],
-        "normalized_action": {
-            "arguments": {
-                "patch": "*** Begin Patch\n*** Add File: hello.py\n+print('hello')\n*** End Patch"
-            }
-        },
+        "normalized_action": {"arguments": {"patch": "*** Begin Patch\n*** Add File: hello.py\n+print('hello')\n*** End Patch"}},
     }
 
 
@@ -54,9 +50,7 @@ def test_stream_event_escapes_terminal_controls(monkeypatch) -> None:
         Console(file=output, force_terminal=False, color_system=None),
     )
 
-    cli._print_stream_event(
-        {"event": "provider.delta", "delta": "before\x1b[2J\u202eafter"}
-    )
+    cli._print_stream_event({"event": "provider.delta", "delta": "before\x1b[2J\u202eafter"})
 
     rendered = output.getvalue()
     assert r"before\x1b[2J\u202eafter" in rendered
@@ -64,9 +58,76 @@ def test_stream_event_escapes_terminal_controls(monkeypatch) -> None:
     assert "\u202e" not in rendered
 
 
-def test_live_chat_fails_before_a_turn_when_key_is_missing(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_chat_result_uses_human_status_and_completion_labels(monkeypatch) -> None:
+    output = StringIO()
+    monkeypatch.setattr(
+        cli,
+        "console",
+        Console(file=output, force_terminal=False, color_system=None),
+    )
+
+    cli._print_chat_result(
+        {
+            "status": "completed",
+            "messages": ["测试通过。"],
+            "tool_results": [
+                {
+                    "action_id": "action_1",
+                    "tool": "process.exec",
+                    "status": "completed",
+                }
+            ],
+            "blockers": [],
+        },
+        set(),
+    )
+    cli._print_chat_result(
+        {
+            "status": "blocked",
+            "messages": [],
+            "tool_results": [],
+            "blockers": ["sandbox attestation failed"],
+        },
+        set(),
+    )
+
+    rendered = output.getvalue()
+    assert "✓ 已完成" in rendered
+    assert "已安全停止（blocked）" in rendered
+    assert "原因：sandbox attestation failed" in rendered
+
+
+def test_chat_status_is_a_compact_summary(monkeypatch) -> None:
+    output = StringIO()
+    monkeypatch.setattr(
+        cli,
+        "console",
+        Console(file=output, force_terminal=False, color_system=None),
+    )
+
+    cli._print_chat_status(
+        {
+            "session_id": "session_demo",
+            "status": "waiting_approval",
+            "goal": "修复 calculator",
+            "state": {
+                "usage": {"rounds": 2, "tool_calls": 3, "total_tokens": 1200},
+                "budget": {"max_rounds": 12, "max_tool_calls": 64},
+                "next_action": "review approval",
+                "blockers": [],
+            },
+        }
+    )
+
+    rendered = output.getvalue()
+    assert "session_demo" in rendered
+    assert "等待审批（waiting_approval）" in rendered
+    assert "轮次 2/12 · 工具 3/64 · Token 1200" in rendered
+    assert "astercode status --session session_demo" in rendered
+    assert '{"' not in rendered
+
+
+def test_live_chat_fails_before_a_turn_when_key_is_missing(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / ".astercode").mkdir()
     monkeypatch.setenv("ASTERCODE_MODEL_PROVIDER", "deepseek")
     monkeypatch.setenv("ASTERCODE_MODEL_ID", "deepseek-v4-flash")
@@ -74,9 +135,7 @@ def test_live_chat_fails_before_a_turn_when_key_is_missing(
     monkeypatch.setattr(
         cli,
         "_run_task_impl",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("a model turn must not start without its key")
-        ),
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("a model turn must not start without its key")),
     )
 
     result = CliRunner().invoke(
@@ -156,9 +215,7 @@ def test_init_rejects_a_hard_linked_project_config(
         outside.unlink(missing_ok=True)
 
 
-def test_aster_shortcut_init_uses_the_strict_workspace_boundary(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_aster_shortcut_init_uses_the_strict_workspace_boundary(tmp_path: Path, monkeypatch) -> None:
     outside = tmp_path.parent / f"{tmp_path.name}-outside"
     (tmp_path / "astercode.toml").write_text(
         "\n".join(
@@ -186,9 +243,7 @@ def test_aster_shortcut_init_uses_the_strict_workspace_boundary(
     assert not outside.exists()
 
 
-def test_chat_config_finally_binds_the_launch_directory(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_chat_config_finally_binds_the_launch_directory(tmp_path: Path, monkeypatch) -> None:
     outside = (tmp_path.parent / f"{tmp_path.name}-does-not-exist").resolve()
     (tmp_path / "astercode.toml").write_text(
         "\n".join(
@@ -217,9 +272,7 @@ def test_chat_config_finally_binds_the_launch_directory(
     assert shortcut_config.security.authorized_roots == [tmp_path.resolve()]
 
 
-def test_chat_config_ignores_project_live_provider_and_ssh_authority(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_chat_config_ignores_project_live_provider_and_ssh_authority(tmp_path: Path, monkeypatch) -> None:
     outside_known_hosts = tmp_path.parent / f"{tmp_path.name}-known-hosts"
     (tmp_path / "astercode.toml").write_text(
         "\n".join(
@@ -261,9 +314,7 @@ def test_chat_config_ignores_project_live_provider_and_ssh_authority(
     assert config.security.ssh.enabled is False
 
 
-def test_chat_config_accepts_live_provider_only_from_user_environment(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_chat_config_accepts_live_provider_only_from_user_environment(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / "astercode.toml").write_text(
         "config_version=1\nproduct_name='test'\n[model]\nprovider='fake'\n",
         encoding="utf-8",
@@ -317,9 +368,7 @@ def test_dangling_state_symlink_is_rejected_before_initialization(
         state.unlink(missing_ok=True)
 
 
-def test_project_selected_live_provider_cannot_start_from_chat(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_project_selected_live_provider_cannot_start_from_chat(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / ".astercode").mkdir()
     (tmp_path / "astercode.toml").write_text(
         "\n".join(
@@ -400,9 +449,7 @@ def test_strict_config_rejects_an_explicit_config_outside_workspace(
         outside.unlink(missing_ok=True)
 
 
-def test_aster_shortcut_migration_cannot_write_an_external_config(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_aster_shortcut_migration_cannot_write_an_external_config(tmp_path: Path, monkeypatch) -> None:
     outside = tmp_path.parent / f"{tmp_path.name}-outside.toml"
     original = "[product]\nname='AsterCode'\n[model]\nprovider='fake'\n[security]\n"
     outside.write_text(original, encoding="utf-8")
@@ -428,9 +475,7 @@ def test_aster_shortcut_migration_cannot_write_an_external_config(
         outside.unlink(missing_ok=True)
 
 
-def test_chat_locks_a_reconciled_nonterminal_session(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_chat_locks_a_reconciled_nonterminal_session(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / ".astercode").mkdir()
     monkeypatch.setattr(
         cli,
@@ -456,9 +501,7 @@ def test_chat_locks_a_reconciled_nonterminal_session(
     monkeypatch.setattr(
         cli,
         "_run_task_impl",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("a locked session must not start a new model turn")
-        ),
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("a locked session must not start a new model turn")),
     )
 
     result = CliRunner().invoke(
@@ -471,9 +514,7 @@ def test_chat_locks_a_reconciled_nonterminal_session(
     assert "当前会话因未确认的动作边界而锁定" in result.output
 
 
-def test_chat_collects_bound_approval_instead_of_treating_text_as_consent(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_chat_collects_bound_approval_instead_of_treating_text_as_consent(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / ".astercode").mkdir()
     request = _approval_request(tmp_path.resolve())
     decisions: list[dict[str, Any]] = []
@@ -489,9 +530,7 @@ def test_chat_collects_bound_approval_instead_of_treating_text_as_consent(
             "approval_request": request,
         }
 
-    def fake_resume(
-        root: Path, session_id: str, decision: dict[str, Any]
-    ) -> dict[str, Any]:
+    def fake_resume(root: Path, session_id: str, decision: dict[str, Any]) -> dict[str, Any]:
         del root, session_id
         decisions.append(decision)
         return {
@@ -521,9 +560,7 @@ def test_chat_collects_bound_approval_instead_of_treating_text_as_consent(
     assert decisions[0]["action_hash"] == request["action_hash"]
 
 
-def test_chat_can_grant_the_exact_p1_action_for_the_session(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_chat_can_grant_the_exact_p1_action_for_the_session(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / ".astercode").mkdir()
     request = _approval_request(tmp_path.resolve())
     decisions: list[dict[str, Any]] = []
@@ -541,9 +578,7 @@ def test_chat_can_grant_the_exact_p1_action_for_the_session(
         },
     )
 
-    def fake_resume(
-        root: Path, session_id: str, decision: dict[str, Any]
-    ) -> dict[str, Any]:
+    def fake_resume(root: Path, session_id: str, decision: dict[str, Any]) -> dict[str, Any]:
         del root, session_id
         decisions.append(decision)
         return {
@@ -567,9 +602,7 @@ def test_chat_can_grant_the_exact_p1_action_for_the_session(
     assert decisions[0]["scope"] == "session"
 
 
-def test_chat_ctrl_c_during_a_running_turn_exits_after_cleanup_message(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_chat_ctrl_c_during_a_running_turn_exits_after_cleanup_message(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / ".astercode").mkdir()
 
     def interrupted(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -588,9 +621,7 @@ def test_chat_ctrl_c_during_a_running_turn_exits_after_cleanup_message(
     assert "运行时清理完成后退出对话" in result.output
 
 
-def test_run_ctrl_c_returns_signal_exit_code_without_traceback(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_run_ctrl_c_returns_signal_exit_code_without_traceback(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / ".astercode").mkdir()
 
     def interrupted(*args: Any, **kwargs: Any) -> dict[str, Any]:

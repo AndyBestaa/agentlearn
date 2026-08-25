@@ -6,10 +6,13 @@
 
 ### Added
 
+- Windows PowerShell 7 发现不再信任 PATH、`ProgramFiles` 或 `SystemRoot` 环境覆盖：宿主通过 Windows known-folder API 取得系统目录，支持固定 MSI 路径和经包名/版本/架构/发布者/reparse 校验的 Microsoft Store 安装；本机 Store 版 `pwsh` 的 NoProfile/UTF-8 smoke 已真实执行。
+- 新增固定作品集演示入口 `scripts/resume_demo.py` 与 `examples/resume_demo/`：从故障基线开始，串联读取、最小 patch、精确 P3 审批/checkpoint resume、Docker 测试、Git diff/status 和审计链核验。默认 Docker backend 必须使用真实 attestation；`--backend fake` 在证据和终端中明确标记 simulated，不声称启动了进程或沙箱。最终发布通过状态仍以目标提交实际运行结果为准。
+- README 首屏增加 CI 状态、核心能力、固定演示命令、架构图和 commit-scoped verified/blocked 边界；新增演示指南、简历项目说明与发布检查清单。
 - Windows 路径安全补齐真实 junction/reparse 回归：根外 junction 的读取拒绝；根内 junction 可只读但写入、创建、移动和删除均拒绝；junction 形式的工作区根也由严格启动校验拒绝。写路径现在逐段检查 symlink/junction/reparse traversal，`fs.move` 的源路径同样复核。
 - Windows 公开入口统一安装 `SIGBREAK`/Ctrl-Break 处理并把 Typer `Abort` 转为干净取消；真实子进程控制台注入回归无 traceback。新增宿主帮助进程 `os._exit` 后 Job `KILL_ON_JOB_CLOSE` 清理测试，以及 POSIX zombie 不再误报存活的回归。
 - WSL2 Ubuntu 独立 Python 3.12 venv 全量矩阵通过，包含 6 项真实 Docker/bash 沙箱测试。受控构建导出改为 Docker 管理的匿名卷：容器停止后宿主从 tar 流自行校验路径、类型、精确集合和大小，避免 Docker 直接写宿主目录；模型命令执行前显式核验所有 capability 集合为零。
-- GitHub Actions 的 Ubuntu job 现在拉取固定 RepoDigest 后，以 `ASTERCODE_REQUIRE_LIVE_DOCKER=1` 强制执行 6 项 Docker 沙箱回归；attestation 不可用时测试失败而不是跳过。本机 Windows 与 WSL2 对同一强制模式均为 `6 passed`；工作流语法已本地解析，远端 Runner 结果须在推送后确认。
+- GitHub Actions 的 Ubuntu job 现在拉取固定 RepoDigest 后，以 `ASTERCODE_REQUIRE_LIVE_DOCKER=1` 强制执行 Docker 沙箱回归；attestation 不可用时测试失败而不是跳过。提交 `0ff88d3` 的远端 Windows/Ubuntu jobs 已通过；后续提交必须以各自 workflow 结果为准。
 - Windows 已通过 WinGet 安装 `cosign` 3.1.3、`syft` 1.51.0、`trivy` 0.74.0；AsterCode 仅从固定 WinGet/程序目录识别它们，不信任 PATH。Syft 本地 `python:3.12-slim` SBOM smoke 已通过；Trivy 首次漏洞数据库下载因网络过慢中止，Cosign 尚未取得可信签名身份证据。
 - 新增 `process.exec_export` 受控构建导出：模型必须列出最多 16 个相对普通文件并接受精确审批；受信容器包装器用 SETUID/SETGID 将构建命令降权，构建用户不能直接写宿主导出目录。仅在命令成功后按总字节上限复制，宿主复核无链接/无额外文件、计算 SHA-256 并原子发布到 `.astercode/artifacts/build_*`。真实 Docker 及 Fake 模型→审批→导出完整链路通过。
 - CLI `run`/`chat` 在 Ctrl-C 时输出明确取消信息；runtime 的 approval-resume 路径现在与初始 run 一样捕获取消并触发 host kill。集成测试在审批后启动真实长进程，再取消 resume，确认完整进程树退出且 registry 无活动记录。
@@ -20,6 +23,7 @@
 - 第一次真实 compileall smoke 因复制 `.venv` 达到 120 秒宿主超时，被正确标记 `unknown`；只读 reconcile 确认无残留容器和宿主改动。修复固定排除后，新 session `session_d8d98eaef8fe4e6882bf4691bfac7894` 在约 1.85 秒完成 `python -m compileall -q .`，退出码 0，临时写入上限和隔离元数据均进入工具证据。
 - 真实 DeepSeek→Function Call→精确 P3 审批→Docker process 垂直 smoke：session `session_46f7633fc2fe4277937777c167fc4413` 完成唯一一次 `python --version`，退出码 0、输出 `Python 3.12.14`，工具证据标记只读文件边界、隐藏 agent state、`network=none`、cap-drop/no-new-privileges 和资源限制。另一次 `python -c` 尝试按既有策略在执行前拒绝，证明 Docker 不是内联解释器策略绕过路径。
 - 新增 `scripts/live_chat_cycle_smoke.py`：在单个真实 `aster` 对话进程和同一 session 中执行聊天以及两轮 `create → modify → delete`，逐项读取持久化审批并只批准精确目标；宿主在每一步按字节核对文件，结束后复核 turn、审批、工具、副作用、审计链和文件不存在。2026-08-23 最新 DeepSeek 现场 session `session_c004966b009d4c479562b714e0d3c56a` 已通过：7 个用户 turn、6 次 consumed 单次审批、7 次工具调用（含一次预期失败且可恢复的非 Git `git.status`）、6 次完成的副作用工具调用（4 次 `fs.apply_patch`、2 次 `fs.delete`）。
+- 2026-08-25 在当前本地发布候选上重新运行真实 DeepSeek 多轮回归，session `session_1648099343334ae6a466569f77f2597f` 通过：7 个用户 turn、6 次精确单次审批、7 次工具调用和两轮完整文件 create/modify/delete，最终目标文件不存在且审计链有效；该测试不包含 Shell、SSH 或浏览器网络。
 
 - Claude Code 风格的 `aster` 快捷入口：在具体项目目录无参数启动持续对话，显示并最终绑定唯一工作区；支持 `/help`、`/status`、`/new`、`/resume`、对话内精确审批和最近多轮用户/助手上下文。`aster`、`astercode` 和模块入口统一执行严格工作区边界，拒绝宽根/系统树/UNC，项目配置不能扩大 Provider、SSH、网络或状态路径权限。新项目配置名为 `astercode.toml`，旧版 AsterCode `config.toml` 继续兼容，其他应用的通用 `config.toml` 不会被误读。
 - 交互与恢复硬化：流式/状态/审批显示转义终端控制和双向文本字符；恢复预算只能收窄当前上限；PRE_TOOL_CALL/TOOL_CALL 不能直接 resume；reconcile 路径重新授权；固定状态和项目配置拒绝 link、junction 与文件 hardlink。
@@ -58,11 +62,12 @@
 
 ### Fixed
 
+- 对话终端将 `partial`/`blocked` 等内部状态显示为带原始枚举的中文含义，工具闭环完成时显示明确成功标记；`/status` 改为目标、预算、用量、下一步和阻塞原因的紧凑摘要，同时保留完整 JSON 查询命令。固定 Demo 只复制四个明确允许的 fixture 文件，不再被正常生成的 `__pycache__` 干扰。
 - 修复 Ubuntu GitHub Actions 的跨平台 mypy 回归：Windows 专属 `signal.CTRL_BREAK_EVENT` 现在通过受保护的运行时属性读取，POSIX 类型检查不再失败；本地 Windows 与 WSL 定向测试、Ruff 和 mypy 均通过。
 - 修复普通非 Git 新目录中 `git.status` 失败会提前结束任务的问题：无副作用、幂等只读失败现在作为有预算上限的观察反馈给模型；本地模型虚拟 cwd 标记由宿主安全绑定到唯一授权工作区，任意其他越界绝对路径仍拒绝。`fs.apply_patch` 仅在原上下文失败且去除单一展示分隔空格后能精确匹配当前文件时规范化 `- old`/`+ new`；已成功写入后的陈旧重复补丁在执行前被策略拒绝、无审批且无副作用，并可由模型继续完成回合。真实同会话双循环与确定性回归均覆盖这些路径。
 - 修复 DeepSeek 在普通新目录中提交 `fs.list(path="")` 时被误判为越界的问题：空字符串及精确的虚拟工作区标记只对 `fs.list/stat/read/search` 映射到宿主唯一授权工作区；写入、移动和删除继续拒绝空目标。真实 DeepSeek session `session_0925077d608240018fdb47a936e29a8a` 使用同样的空 path 完成一次 P0 `fs.list`，无 blocker、审批或副作用。
 - 改进内联解释器拒绝后的自动恢复：`process.exec` 工具契约明确要求运行已审查的工作区文件，不使用 `python -c`、`node -e` 或 `ruby -e`；精确的内联代码策略拒绝现在作为执行前、零副作用、有轮数预算的观察反馈给模型，使其可改用 `python file.py`，而用户拒绝、路径越界和专用工具绕过仍终止。真实 DeepSeek + Docker session `session_038b35bb629348e4aa6f9ce66d30063e` 验证第一条 `python -c` 被拒绝且零副作用，随后 `python inline_add.py` 经精确审批进入 filesystem/network sandbox，输出 `5` 并 completed。
-- 同步后本地多轮回归修复四类状态/上下文问题（暂未推送）：明确的问候与通用概念问答可零工具 completed，工作区/文件/代码动作仍需证据；不存在但仍位于授权根内的只读目标由 handler 返回普通 not-found 观察，越界与链接逃逸继续拒绝；尾随只读 not-found 不再遮蔽前面已验证的删除成功；Provider 只获得 action_id/tool/approved/scope 审批摘要，绝不获得 nonce、approval_id、hash、actor 或 reason；明确拒绝结束旧任务上下文，下一轮不会继续请求被拒绝动作。真实 DeepSeek sessions `session_7d900a2b47fa47fabebcaf7f4752ba6a`、`session_39f6d00411c04cfb818d68768f36d7e4`、`session_6ca9afec1f89409c9a7efcd582f9b09b`、`session_64c92f4347234e82a332072a5eecfce1` 分别覆盖双循环代码操作、Docker 执行与上下文解释、审批报告/删除后缺失验证、拒绝后安全继续。
+- 多轮回归修复四类状态/上下文问题：明确的问候与通用概念问答可零工具 completed，工作区/文件/代码动作仍需证据；不存在但仍位于授权根内的只读目标由 handler 返回普通 not-found 观察，越界与链接逃逸继续拒绝；尾随只读 not-found 不再遮蔽前面已验证的删除成功；Provider 只获得 action_id/tool/approved/scope 审批摘要，绝不获得 nonce、approval_id、hash、actor 或 reason；明确拒绝结束旧任务上下文，下一轮不会继续请求被拒绝动作。真实 DeepSeek sessions `session_7d900a2b47fa47fabebcaf7f4752ba6a`、`session_39f6d00411c04cfb818d68768f36d7e4`、`session_6ca9afec1f89409c9a7efcd582f9b09b`、`session_64c92f4347234e82a332072a5eecfce1` 分别覆盖双循环代码操作、Docker 执行与上下文解释、审批报告/删除后缺失验证、拒绝后安全继续。
 - 修复提交 `7590e20` 的 Ubuntu CI 失败：Docker 控制环境测试此前在所有平台都硬编码 `C:\trusted\docker.exe`，POSIX `Path` 会将其视为普通文件名并得到父目录 `.`；测试现使用 pytest 的平台原生临时目录，同时继续验证 Docker 控制进程不会继承 remote daemon、context、配置或代理变量。带 Git 的 Python 3.12 Linux 容器确认远端失败从 1 项降为 0 项，当前快照在 package smoke 之前的锁文件、依赖、compile、pytest、POSIX 专项、ruff、mypy 和构建均通过；本机重复下载 Linux wheelhouse 时受外部 PyPI 超时影响，Windows packaged CLI smoke 和原 GitHub Windows job 已通过。
 - 修复真实多轮对话暴露的 host 权威与 Provider 瞬态结构错误：非 SSH 工具的执行 host 现在由宿主强制为 `local`，SSH host 从已校验的 `arguments.host_id` 派生；不完整 stream、无效结构化 JSON 和无效工具参数只在本次决策尚未执行工具时进行一次有界重试，失败响应的可信 usage 计入预算，并记录 `provider.retry`。无 usage、格式错误事件或超预算均 fail-closed。
 - 修复模型在副作用成功后重复提出等价 patch 的问题：编排器按实际变更行生成语义动作键，在同一 Provider 决策及同一用户 turn 内抑制已验证的重复写入；未验证的启动类结果不会被误记成已完成。审批请求只记录一次。文件审批绑定加入目标/父目录身份、mtime/ctime/大小及常规文件 SHA-256，执行前在工作区锁内复核；新增文件采用 no-clobber 原子发布，未知工具返回类型 fail-closed。Gateway 的拒绝、超时、异常、取消和 unknown 结果现在都经同一终态持久化路径，不再让 `tool_calls` 停留在 `policy_check`；若副作用 handler 返回无效结果，宿主按 `unknown` 处理而不是假定失败且无副作用。
@@ -75,7 +80,7 @@
 - Git executor 拒绝仓库级 `include/includeIf` 配置，强制禁用 hooks、外部 diff、commit/tag GPG signing、credential helper 和 askpass；恶意仓库 signing 配置回归通过。
 - Git P0 查询进一步拒绝 filter/diff/merge 外部驱动、fsmonitor 和外部 attributes/excludes 配置，设置 `GIT_NO_LAZY_FETCH=1` 并对 diff/show 禁用 external diff/textconv；通用 process/shell 也拒绝绕过受控 Git、SSH、network 和 delete 路径。
 - 修复首次公开 CI 暴露的跨平台差异：Linux mypy 通过运行时检查访问 Windows-only API 并保持 fail-closed；Windows 8.3 临时目录别名改用文件身份比较；GitHub Actions 升级到 Node 24 action 版本。
-- 2026-08-25 开启开发者模式后的最终全量回归：Windows 11 `418 passed, 6 skipped`，WSL2 Ubuntu `407 passed, 17 skipped`；`ruff check .`、`mypy src tests`、`uv lock --check`、wheel/sdist 构建和隔离环境 packaged CLI smoke 通过。历史本机 Edge 离线 smoke 另为 `1 passed, 5 deselected`；skip 不视为能力通过。
+- 2026-08-25 当前本地发布候选全量回归：Windows 11 `431 passed, 5 skipped`，WSL2 Ubuntu `417 passed, 19 skipped`，WSL 强制 live Docker 回归 `6 passed`；两端 `ruff check .`、`mypy src tests`、`uv lock --check`、wheel/sdist 构建和隔离环境 packaged CLI smoke 通过。历史本机 Edge 离线 smoke 另为 `1 passed, 5 deselected`；skip 不视为能力通过，每个候选提交仍以其对应的远端 CI 结果为最终依据。
 
 ### Not verified / still blocked
 

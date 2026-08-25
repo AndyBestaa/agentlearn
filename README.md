@@ -1,15 +1,65 @@
 # AsterCode
 
-AsterCode 是一个基于 LangGraph 的本地优先编程代理原型。模型只能提出结构化工具调用；路径校验、权限分级、审批、执行、审计和恢复由宿主程序完成。它不是 Claude Code 的私有实现或品牌复制品。
+[![offline-ci](https://github.com/AndyBestaa/agentlearn/actions/workflows/ci.yml/badge.svg)](https://github.com/AndyBestaa/agentlearn/actions/workflows/ci.yml)
 
-当前版本的重点仍是**不设置 API key 也能运行的离线垂直链路**：Fake Provider、文件/Git 工具、审批与恢复、SQLite WAL/FTS5、Fake SSH、Fake Browser、Fake MCP/Plugin、只读子代理、流式事件和 replay 都可以用自动化测试验证。Windows 11 + Docker Desktop 现已具备经过主动探测的 Linux 容器执行边界：固定镜像摘要、`--network none`、只读根与宿主源码挂载、512 MiB 临时可写工作副本、隐藏状态/VCS/本机依赖目录、非 root、模型命令 capabilities 全为零、no-new-privileges，以及 CPU/memory/PID/tmpfs 限额；宿主 Docker CLI 继续受 Job Object 进程树约束。当前切片可运行 Python/bash 验证和需要写缓存/构建产物的命令，但不能联网安装依赖；普通构建产物不会回写宿主，精确审批的 `process.exec_export` 可通过受校验的容器 tar 流保留白名单普通文件。真实 OpenAI、SSH、浏览器外网、GUI 和插件进程隔离仍未验证。
+> 一个基于 LangGraph 的本地编程 Agent：能读代码、修改文件、运行受控测试，并用可恢复的审批与审计链证明“实际做过什么”。
+
+AsterCode 的安全边界在宿主代码中，而不在提示词中。模型只能提出结构化 Function Call；路径授权、P0-P4 风险分级、精确审批、工具执行、结果验证和 checkpoint 恢复由运行时强制。它借鉴终端编程 Agent 的交互形态，但不是 Claude Code 的私有实现或品牌复制品。
+
+## 核心能力
+
+- **代码工作闭环**：文件读取/搜索/精确 patch、受控 Git 查询、测试执行、diff 与退出码证据。
+- **权限与隔离**：动作按真实参数重新定级；Docker 使用固定镜像摘要、只读宿主源码、临时可写副本、`--network none`、非 root 和资源限额。
+- **可恢复与可审计**：LangGraph 状态机、SQLite WAL/FTS5、工具前后 checkpoint、一次性审批、kill switch 与哈希链审计。
+- **可测试的 Provider 边界**：默认 deterministic Fake/replay；另有 OpenAI Responses 和 DeepSeek Chat 适配器，凭据只从环境变量读取。
+
+## 60 秒固定演示
+
+该演示不需要 API key 或外网。它复制 [`examples/resume_demo/`](examples/resume_demo/) 中的故障项目，在全新临时 Git 工作区依次完成 `inspect → diagnose → patch → approval/resume → Docker test → git diff/status → audit verify`：
+
+```powershell
+cd C:\path\to\langgraph-agent
+uv sync --extra dev
+uv run python scripts/resume_demo.py --backend docker --cleanup
+```
+
+只有 Docker attestation、故障基线、精确工具链、一次 P3 审批恢复、回归测试、最小 diff 和审计链全部满足时，脚本才输出 `AsterCode resume demo: PASS`。`--backend fake` 是明确标注的无进程 CI fallback，不能作为沙箱执行证据。完整讲解和现场演示脚本见 [docs/demo-guide.md](docs/demo-guide.md)，简历表述见 [docs/resume-project.md](docs/resume-project.md)。
+
+## 架构一览
+
+```mermaid
+flowchart LR
+    U[用户 / CLI] --> O[LangGraph Orchestrator]
+    O --> M[Model Provider]
+    M -->|结构化 proposal| O
+    O --> P[Policy + Approval Gateway]
+    P --> T[Tool Registry / Executors]
+    T -->|ToolResult / diff / exit code| O
+    O --> S[(SQLite / Checkpoint / Audit)]
+    P -. 拒绝或暂停 .-> U
+    T -. 未验证 live 边界 .-> B[BLOCKED]
+```
+
+实线表示当前运行时的数据/控制链；虚线表示必须停下的审批或未验证边界。详细分层见 [docs/architecture.md](docs/architecture.md)。
+
+## 已验证范围
+
+| 范围 | 证据 | 不能外推为 |
+| --- | --- | --- |
+| 2026-08-25 本地发布候选 | Windows 11 `431 passed, 5 skipped`；WSL2 Ubuntu `417 passed, 19 skipped`；WSL 强制 live Docker `6 passed`；两端 Ruff、mypy、lock、构建和 packaged CLI smoke 通过 | 该候选提交对应的远端 CI 结果；裸机 Linux/独立 Docker daemon |
+| 提交 `0ff88d3` | GitHub Actions 的 Windows/Ubuntu jobs 已通过 | 当前候选工作树的远端 CI 结果 |
+| Docker 本地执行切片 | 固定 RepoDigest、只读宿主源码、临时副本、无网络、非 root、capabilities 清零、资源限制与受控产物导出已有自动化验证 | 浏览器、SSH 或宿主进程的通用网络沙箱 |
+| DeepSeek 现场 smoke | 有范围有限的只读、文件增删改和 Docker 执行 session 证据 | 所有模型/账户、成本、长任务、真实 SSH 或生产部署 |
+| Fake SSH/Browser/MCP/Plugin | deterministic 自动化测试 | 真实远程主机、外网浏览器或生产插件隔离 |
+
+发布前必须按 [docs/release-checklist.md](docs/release-checklist.md) 在目标提交重新刷新测试数字。真实 OpenAI、SSH、浏览器外网、GUI 和插件进程隔离继续标记为 `LIVE INTEGRATION NOT VERIFIED` 或 `BLOCKED`。
 
 ## 安装与首次启动
 
 要求 Python 3.12+ 和 uv：
 
 ```powershell
-cd C:\Users\MT\langgraph-agent
+cd C:\path\to\langgraph-agent
 uv sync --extra dev
 uv run astercode init --root .
 uv run astercode doctor --root .
@@ -33,7 +83,7 @@ uv run astercode doctor --root .
 开发阶段可以把当前源码安装成全局可执行命令；`--editable` 会让后续源码修改立即生效：
 
 ```powershell
-cd C:\Users\MT\langgraph-agent
+cd C:\path\to\langgraph-agent
 uv tool install --editable . --force
 uv tool update-shell
 ```
@@ -272,13 +322,13 @@ uv run python scripts/live_chat_cycle_smoke.py --root C:\path\to\empty-test-work
 
 大多数自动化测试不需要 API key、真实网络或 SSH；使用 deterministic Fake Provider/adapter、临时 Git 仓库和 replay fixture。Docker live 测试使用固定摘要镜像，实际验证宿主源码只读、临时副本可写且不回传、生成目录排除、Python/compileall、隐藏 agent state、无网络、超时清理和 start/poll/stop。真实 DeepSeek session `session_d8d98eaef8fe4e6882bf4691bfac7894` 走通 Function Call → 精确审批 → 临时副本 `python -m compileall -q .` → 退出码 0；此前一次复制 `.venv` 的超时被标为 `unknown`，reconcile 确认无残留后才修复并新建 session 重试。该 smoke 不证明成本、远程操作或其他 live 权限安全。
 
-本轮最终全量回归结果为 `401 passed, 10 skipped`。新增测试覆盖受控构建产物导出、构建进程不能直接写导出目录、完整 Fake 模型审批链，以及审批后运行任务的取消与进程树清理。真实 DeepSeek 非 Git 工作区对话回归 session `session_c004966b009d4c479562b714e0d3c56a` 通过聊天及两轮创建、修改、删除：7 个用户回合、6 次精确审批、7 次工具调用、6 次实际副作用，最终测试文件不存在。针对模型使用空字符串表示工作区根路径的现场复测 session `session_0925077d608240018fdb47a936e29a8a` 也已完成，且空路径只对只读文件工具安全映射，删除等副作用工具仍拒绝。内联命令恢复 session `session_038b35bb629348e4aa6f9ce66d30063e` 证明 `python -c` 不执行，模型随后自动改用已审查文件，经精确审批进入 Docker filesystem/network sandbox 并输出 `5`。本地继续完成真实纯聊天、双轮增删改、Python 创建/修改/Docker 执行/上下文解释/删除、审批报告、删除后 not-found 验证和拒绝后继续；对应 sessions 为 `session_7d900a2b47fa47fabebcaf7f4752ba6a`、`session_39f6d00411c04cfb818d68768f36d7e4`、`session_6ca9afec1f89409c9a7efcd582f9b09b`、`session_64c92f4347234e82a332072a5eecfce1`。这些现场 session 只作为范围有限的证据，不代表外部 live 集成完成。另有历史本机 Edge 离线 smoke `1 passed, 5 deselected`。skip 仍代表缺少相应平台/权限或 live 条件，不应解释成已通过。
+2026-08-25 当前本地发布候选证据为：Windows 11 `431 passed, 5 skipped`，WSL2 Ubuntu `417 passed, 19 skipped`，并在 WSL 以 `ASTERCODE_REQUIRE_LIVE_DOCKER=1` 强制执行 Docker live 测试得到 `6 passed`；两端 `ruff check .`、`mypy src tests`、`uv lock --check`、wheel/sdist 构建和隔离环境 packaged CLI smoke 同时通过。skip 只表示平台或显式 live 条件未满足，不计入已完成能力；每个发布候选均以对应提交的远端 GitHub Actions 结果为最终依据。
+
+现场 DeepSeek sessions 还覆盖过非 Git 工作区聊天、两轮创建/修改/删除、空工作区路径的安全绑定、拒绝内联解释器后改用已审查文件，以及 Docker 中运行 Python。它们只作为范围有限的兼容性证据，不代表外部 live 集成完成；可复现的公开主演示以不需要凭据的 `scripts/resume_demo.py` 为准。
 
 ## 常见问题
 
-2026-08-25 最新全量回归：开启开发者模式后的 Windows 11 为 `418 passed, 6 skipped`；WSL2 Ubuntu 为 `407 passed, 17 skipped`，其中包含 6 项真实 Docker/bash 沙箱测试。`ruff check .`、`mypy src tests`、`uv lock --check`、wheel/sdist 构建和隔离环境 packaged CLI smoke 同时通过。skip 只表示平台或显式 live 条件未满足，不算能力通过；WSL + Docker Desktop 证据也不外推为裸机 Linux 或生产 daemon 验收。
-
-GitHub Actions 的 Ubuntu job 会拉取同一固定摘要镜像，并设置 `ASTERCODE_REQUIRE_LIVE_DOCKER=1` 单独运行 Docker live 测试；因此缺少 Docker、镜像或 attestation 会让 job 失败，不能静默跳过。该工作流已完成本地 YAML 解析和 Windows/WSL 强制模式验证，远端结果需在下一次推送后确认。
+GitHub Actions 的 Ubuntu job 会拉取同一固定摘要镜像，并设置 `ASTERCODE_REQUIRE_LIVE_DOCKER=1` 单独运行 Docker live 测试；因此缺少 Docker、镜像或 attestation 会让 job 失败，不能静默跳过。提交 `0ff88d3` 的远端 Windows/Ubuntu jobs 已通过；后续提交仍必须以对应 workflow 结果为准，不能沿用旧提交的绿色状态。
 
 - **没有 API key**：使用 `--fake` 或 `--replay`，这是受支持的离线模式。
 - **`provider-key UNSET`**：只影响真实模型调用，不影响离线测试。DeepSeek 使用 `DEEPSEEK_API_KEY`，OpenAI 使用 `OPENAI_API_KEY`，两者不会互相借用。
