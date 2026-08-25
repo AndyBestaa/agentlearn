@@ -64,6 +64,7 @@
 
 ### Fixed
 
+- 澄清跨 AI 开发交接语义：交接目标是让下一开发助手通过文档和代码地图读懂项目，不涉及为开发助手保存账号配置；`DEEPSEEK_API_KEY`/`OPENAI_API_KEY` 仅指 AsterCode 自己调用“大脑模型”的运行时凭据。
 - 修复跨机器开发时暴露的两处隐性环境耦合：审批终端单测显式使用 Fake Provider，不再取决于宿主是否配置真实 key；Windows 清洁进程环境从系统 API 获取 `SystemRoot`、`ProgramFiles` 和 `ProgramData`，固定 PowerShell 包查询的系统 cwd，并拒绝非本地系统盘，避免缺失 `%SystemDrive%` 展开时把 AppX 缓存写进工作区。
 - 对话终端将 `partial`/`blocked` 等内部状态显示为带原始枚举的中文含义，工具闭环完成时显示明确成功标记；`/status` 改为目标、预算、用量、下一步和阻塞原因的紧凑摘要，同时保留完整 JSON 查询命令。固定 Demo 只复制四个明确允许的 fixture 文件，不再被正常生成的 `__pycache__` 干扰。
 - 修复 Ubuntu GitHub Actions 的跨平台 mypy 回归：Windows 专属 `signal.CTRL_BREAK_EVENT` 现在通过受保护的运行时属性读取，POSIX 类型检查不再失败；本地 Windows 与 WSL 定向测试、Ruff 和 mypy 均通过。

@@ -192,7 +192,7 @@ aster doctor --root .
 
 ## 8. 安全注入离职后仍获授权的 Provider key
 
-项目的 Provider adapter 不需要因更换电脑或开发 Agent 而重写。个人电脑只使用离职后仍明确获授权的 key；若现有 key 属于公司或授权随离职结束，则改用个人账户新生成的 key，不导出或转发公司凭据。若现有 key 本来就属于个人且仍有效，可继续使用相同环境变量协议。只把非秘密的 Provider 和模型 ID 保存为用户环境变量；key 默认只注入当前 PowerShell 会话。
+这里的 key 只指 AsterCode 运行时调用“大脑模型”的 Provider 凭据，不是接手代码的开发助手配置。AsterCode 的 Provider adapter 不需要因更换电脑或开发助手而重写。个人电脑只使用离职后仍明确获授权的 key；若现有 key 属于公司或授权随离职结束，则改用个人账户新生成的 key，不导出或转发公司凭据。若现有 key 本来就属于个人且仍有效，可继续使用相同环境变量协议。只把非秘密的 Provider 和模型 ID 保存为用户环境变量；key 默认只注入当前 PowerShell 会话。
 
 先定义隐藏输入辅助函数：
 
