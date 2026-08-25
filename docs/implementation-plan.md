@@ -15,7 +15,7 @@
 | M4 Memory/Recovery | partial but usable | SQLite WAL/FTS5、schema v8 migrations/backups、三层 memory、edit/conflict/supersedes、字段保留型 checkpoint compaction、跨进程审批恢复、process registry/read-only reconcile、Docker backend identity、stream/replay；所有写入前 schema preflight 拒绝 future/gap/伪造版本、缺表列和非 FTS5；POSIX zombie 不再误报为可恢复进程 | 任意外部副作用的自动回滚、远程 reconcile、跨重启 POSIX 进程组回收的 live 证明 |
 | M5 SSH/SFTP | transport slice, live blocked | Fake SSH 全契约；默认关闭的系统 OpenSSH 命令通道；固定系统路径和结构化 argv；严格专用 known_hosts 与派生指纹一致性；agent/keychain-only；禁用密码、代理、转发、X11、复用；allowlist/网络证明双门槛；远端停止 unknown | 可信 SSH egress allowlist、首次指纹登记、真实主机、SFTP、远程 PID、备份/原子替换/回滚和现场验证 |
 | M6 Browser/MCP/Plugin/Subagent/GUI | offline complete, engine slice verified | Fake Browser/MCP/Plugin；可选 Playwright + Edge 非持久化只读 context；每请求 allowlist/DNS/重定向检查；`about:blank` 零页面网络 smoke；Draft 2020-12 严格 schema；只读子代理双开关、原子父子预算 reservation/usage 合并、跨重启全额保守恢复、grant/parent/all 定向取消 | 浏览器 OS egress、外网导航/下载/提交仍 blocked；子代理仍同进程且 live delegation blocked；真实 MCP/plugin 隔离、GUI、生产调度 |
-| M7 跨平台/发布 | partial, resume-demo ready | wheel、安装 smoke、README、配置和迁移备份、审计 verify、回归 fixture、Git Bash 兼容 smoke、本地性能基线；真实 Windows Ctrl-Break、审批恢复取消、宿主崩溃 Job 清理均已回归；WSL2 Ubuntu 中 Python 3.12、bash、Docker Desktop Linux engine 与全量测试通过；提交 `2d3d13a` 的 GitHub Actions Windows/Ubuntu jobs 通过；新增固定简历演示和 AI 接手入口 | 本交接候选对应远端 CI、裸机 Linux/独立 daemon、更多 live 集成矩阵 |
+| M7 跨平台/发布 | partial, resume-demo ready | wheel、安装 smoke、README、配置和迁移备份、审计 verify、回归 fixture、Git Bash 兼容 smoke、本地性能基线；真实 Windows Ctrl-Break、审批恢复取消、宿主崩溃 Job 清理均已回归；`bba1937` 的 GitHub Actions `offline-ci` run #23 Windows/Ubuntu jobs 通过；新增固定简历演示和 AI 接手入口 | 独立 WSL2 矩阵、裸机 Linux/独立 daemon、更多 live 集成矩阵 |
 
 ## 已完成的离线垂直链路
 
@@ -55,7 +55,7 @@
 
 上述本地闭环的可执行验收场景、通过定义以及第三阶段可靠性回归映射统一维护在 [v0.1 验收矩阵](v0.1-acceptance-matrix.md)。
 
-阶段 1–4 的实际命令、通过/跳过结果、Docker Demo 和供应链 `BLOCKED` 证据统一记录在 [v0.1 RC 候选报告](v0.1-rc-report.md)；当前报告已绑定已推送的候选基线 `01beed7` 并在 clean worktree 上重核，仍不能替代针对该提交刷新的 clean clone/远程 CI 结论。
+阶段 1–4 的实际命令、通过/跳过结果、Docker Demo 和供应链 `BLOCKED` 证据统一记录在 [v0.1 RC 候选报告](v0.1-rc-report.md)；当前报告绑定已推送的候选基线 `bba1937`，并在 clean worktree 上重核，远端 CI 对应 run #23 已成功，仍不能替代独立 WSL2/裸机 daemon 证据。
 
 ## 2026-08-23 现场验证（范围有限）
 
@@ -90,7 +90,7 @@
 - 将 Fake SSH/Browser/MCP/Plugin/Subagent 测试纳入固定 CI 命令；所有 fixture 保证无网络和无秘密。
 - 配置迁移、memory conflict/poisoning、audit tamper detection 的主要文档与回归已完成；后续仅维护迁移兼容性和更多损坏数据库 fixture。
 - WSL2 Ubuntu 已用独立 Linux venv 跑通全量 `pytest`，其中包含 6 项真实 Docker/bash 沙箱测试；这证明 WSL Ubuntu + Docker Desktop Linux engine 组合，不等同于裸机 Linux、独立生产 daemon 或通用网络出口验收。
-- GitHub Actions Ubuntu job 已配置固定摘要镜像拉取和强制 live Docker 回归；`ASTERCODE_REQUIRE_LIVE_DOCKER=1` 会把缺失 attestation 从 skip 提升为失败。首次运行暴露的 Ubuntu `CTRL_BREAK_EVENT` mypy 回归已修复；提交 `2d3d13a` 的远端 Windows/Ubuntu jobs 已通过。后续提交必须重新等待对应 workflow 结论，不能沿用该提交的证据。
+- GitHub Actions Ubuntu job 已配置固定摘要镜像拉取和强制 live Docker 回归；`ASTERCODE_REQUIRE_LIVE_DOCKER=1` 会把缺失 attestation 从 skip 提升为失败。首次运行暴露的 Ubuntu `CTRL_BREAK_EVENT` mypy 回归已修复；历史提交 `2d3d13a` 的远端 jobs 已通过，当前候选 `bba1937` 的 `offline-ci` run #23 也已通过。后续提交必须重新等待对应 workflow 结论，不能沿用旧提交的证据。
 
 ### B. 具备独立安全证据后再做 live adapter
 
@@ -105,7 +105,7 @@
 
 ## 每次阶段验收命令
 
-提交 `2d3d13a` 的远端 GitHub Actions Windows/Ubuntu jobs 属于历史证据。当前候选基线 `01beed7` 的 Windows 11 实测为 `472 passed, 5 skipped`，并已重核 lint、类型、锁文件、构建、packaged CLI、clean preflight 和 Docker Demo；该候选的 WSL2 矩阵及远端 CI 尚未刷新，不能沿用历史数字。skip 继续表示未满足的平台/权限或 live 条件，不计入已完成能力。现场 DeepSeek sessions 是有限范围的兼容性证据，不替代 deterministic Demo 或完整回归。
+历史提交 `2d3d13a` 的远端 GitHub Actions jobs 仅作历史证据。当前候选基线 `bba1937` 的 Windows 11 实测为 `472 passed, 5 skipped`，并已重核 lint、类型、锁文件、构建、packaged CLI、clean preflight、Docker Demo 和 `offline-ci` run #23；独立 WSL2 矩阵及裸机 daemon 尚未刷新，不能沿用历史数字。skip 继续表示未满足的平台/权限或 live 条件，不计入已完成能力。现场 DeepSeek sessions 是有限范围的兼容性证据，不替代 deterministic Demo 或完整回归。
 
 ```powershell
 uv run astercode doctor --root .
@@ -125,6 +125,6 @@ uv run python scripts/resume_demo.py --backend docker --cleanup
 
 ## 暂不做的事情
 
-当前候选基线 `01beed7`：Windows 11 全量为 `472 passed, 5 skipped`；lint、类型、锁文件、构建、packaged CLI、clean preflight 和 Windows 固定 Docker Demo 均通过。WSL2 与远端 CI 尚未针对该候选刷新，不能沿用旧的 `441/426/6` 快照；供应链证据仍按缺少可信 provenance/trust anchor 保持 `BLOCKED`。skip 不计为能力通过；真实 DeepSeek 同会话 7 turn、6 次精确审批、两轮文件 create/modify/delete 是此前的有限 live 回归。
+当前候选基线 `bba1937`：Windows 11 全量为 `472 passed, 5 skipped`；lint、类型、锁文件、构建、packaged CLI、clean preflight、Windows 固定 Docker Demo 和 GitHub Actions `offline-ci` run #23 均通过。独立 WSL2 矩阵和裸机 daemon 尚未刷新，不能沿用旧的 `441/426/6` 快照；供应链证据仍按缺少可信 provenance/trust anchor 保持 `BLOCKED`。skip 不计为能力通过；真实 DeepSeek 同会话 7 turn、6 次精确审批、两轮文件 create/modify/delete 是此前的有限 live 回归。
 
 不自动 commit、push、发布、部署、连接生产主机或索取私钥/API key；不通过关闭安全策略来“解锁”未完成能力。任何 required-path 能力若没有可强制执行的宿主边界，就保持 `BLOCKED`。

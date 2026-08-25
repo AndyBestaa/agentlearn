@@ -13,7 +13,7 @@ AsterCode 是一个基于 LangGraph 的 local-first 编程 Agent：通过结构�
 - 设计 `OBSERVE → PLAN → POLICY_CHECK → APPROVAL_GATE → TOOL_CALL → CAPTURE → VERIFY → CHECKPOINT` 状态机，将模型限制为结构化工具 proposal；宿主按真实路径和副作用执行 P0-P4 风险重判，审批绑定 action hash、cwd、diff、TTL 与一次性 nonce。
 - 实现授权根内文件/Git 工具、原子 patch、秘密脱敏、工具前后 checkpoint、跨进程 resume、kill switch 与哈希链审计；使用 SQLite WAL/FTS5 管理 session、审批、三层记忆、artifact 和进程身份。
 - 构建 Docker 本地执行边界：固定镜像 RepoDigest、只读宿主源码、临时可写副本、`--network none`、非 root、capabilities 清零及 CPU/memory/PID/tmpfs 限额；测试结果、退出码和 Git diff 作为完成证据。
-- 建立 deterministic Fake/replay 与跨平台回归体系；候选基线 `01beed7` 在 Windows 11 为 `472 passed, 5 skipped`，并通过 Ruff、mypy、lock、构建、packaged CLI smoke、clean preflight 和固定 Docker Demo；该候选的 WSL2 矩阵与远端 CI 尚未刷新，不能沿用历史数字，每个新候选仍以自身远端 CI 为最终证据。
+- 建立 deterministic Fake/replay 与跨平台回归体系；候选基线 `bba1937` 在 Windows 11 为 `472 passed, 5 skipped`，并通过 Ruff、mypy、lock、构建、packaged CLI smoke、clean preflight、固定 Docker Demo 和 GitHub Actions `offline-ci` run #23；独立 WSL2 矩阵尚未刷新，不能沿用历史数字，每个新候选仍以自身远端 CI 为最终证据。
 
 ## 30 秒口头介绍
 
@@ -69,4 +69,4 @@ uv run python scripts/resume_demo.py --backend docker --cleanup
 - Built a local-first coding agent with LangGraph and schema-validated function calls; enforced P0-P4 policy decisions and hash-bound, single-use approvals in the host runtime instead of relying on prompts.
 - Implemented workspace-scoped filesystem/Git tools, atomic patches, SQLite-backed checkpoints and memory, crash-safe resume, kill switch, redaction, and hash-chained audit evidence.
 - Added an attested Docker execution slice with a pinned image digest, read-only host source, ephemeral writable workspace, no network, non-root execution, dropped capabilities, and resource limits.
-- Developed deterministic replay/fake providers and cross-platform regression coverage; the 2026-08-25 handoff candidate passed 441 Windows tests, 426 WSL tests, and 6 required live-Docker checks, plus lint, typing, locked builds, packaged CLI smoke, and the fixed Docker demo. Commit `2d3d13a` passed Windows/Ubuntu GitHub Actions; every new candidate is revalidated after push.
+- Developed deterministic replay/fake providers and cross-platform regression coverage; candidate `bba1937` passed 472 Windows tests with 5 platform skips, plus lint, typing, locked builds, packaged CLI smoke, clean preflight, the fixed Docker demo, and GitHub Actions `offline-ci` run #23 on Windows/Ubuntu. The standalone WSL matrix remains a separate unverified boundary; every new candidate is revalidated after push.
