@@ -55,7 +55,7 @@
 
 上述本地闭环的可执行验收场景、通过定义以及第三阶段可靠性回归映射统一维护在 [v0.1 验收矩阵](v0.1-acceptance-matrix.md)。
 
-当前工作树阶段 1–4 的实际命令、通过/跳过结果、Docker Demo 和供应链 `BLOCKED` 证据统一记录在 [v0.1 RC 候选报告](v0.1-rc-report.md)；该报告绑定本轮 HEAD，但工作树未提交，不能替代提交后的 clean clone/远程 CI 结论。
+阶段 1–4 的实际命令、通过/跳过结果、Docker Demo 和供应链 `BLOCKED` 证据统一记录在 [v0.1 RC 候选报告](v0.1-rc-report.md)；当前报告已绑定已推送的候选基线 `01beed7` 并在 clean worktree 上重核，仍不能替代针对该提交刷新的 clean clone/远程 CI 结论。
 
 ## 2026-08-23 现场验证（范围有限）
 
@@ -105,7 +105,7 @@
 
 ## 每次阶段验收命令
 
-提交 `2d3d13a` 的远端 GitHub Actions Windows/Ubuntu jobs 已通过。2026-08-25 本地交接候选已刷新为 Windows 11 `441 passed, 5 skipped`、WSL2 Ubuntu `426 passed, 20 skipped`，并在 WSL 以强制 live 条件确认 Docker 回归 `6 passed`；每个候选提交仍以其对应的远端 CI 结果为最终依据。skip 继续表示未满足的平台/权限或 live 条件，不计入已完成能力。现场 DeepSeek sessions 是有限范围的兼容性证据，不替代 deterministic Demo 或完整回归。
+提交 `2d3d13a` 的远端 GitHub Actions Windows/Ubuntu jobs 属于历史证据。当前候选基线 `01beed7` 的 Windows 11 实测为 `472 passed, 5 skipped`，并已重核 lint、类型、锁文件、构建、packaged CLI、clean preflight 和 Docker Demo；该候选的 WSL2 矩阵及远端 CI 尚未刷新，不能沿用历史数字。skip 继续表示未满足的平台/权限或 live 条件，不计入已完成能力。现场 DeepSeek sessions 是有限范围的兼容性证据，不替代 deterministic Demo 或完整回归。
 
 ```powershell
 uv run astercode doctor --root .
@@ -125,6 +125,6 @@ uv run python scripts/resume_demo.py --backend docker --cleanup
 
 ## 暂不做的事情
 
-2026-08-25 本地交接候选：Windows 11 全量为 `441 passed, 5 skipped`；WSL2 Ubuntu 全量为 `426 passed, 20 skipped`，并单独设置 `ASTERCODE_REQUIRE_LIVE_DOCKER=1` 确认 6 项真实 Docker 沙箱测试全部通过。两边的 skip 均是平台或显式 live 条件，不计为能力通过。`ruff check .`、`mypy src tests`、`uv lock --check`、wheel/sdist 构建和隔离环境 packaged CLI smoke 同时通过，Windows 固定 Docker Demo 也通过；真实 DeepSeek 同会话 7 turn、6 次精确审批、两轮文件 create/modify/delete 是此前的有限 live 回归。
+当前候选基线 `01beed7`：Windows 11 全量为 `472 passed, 5 skipped`；lint、类型、锁文件、构建、packaged CLI、clean preflight 和 Windows 固定 Docker Demo 均通过。WSL2 与远端 CI 尚未针对该候选刷新，不能沿用旧的 `441/426/6` 快照；供应链证据仍按缺少可信 provenance/trust anchor 保持 `BLOCKED`。skip 不计为能力通过；真实 DeepSeek 同会话 7 turn、6 次精确审批、两轮文件 create/modify/delete 是此前的有限 live 回归。
 
 不自动 commit、push、发布、部署、连接生产主机或索取私钥/API key；不通过关闭安全策略来“解锁”未完成能力。任何 required-path 能力若没有可强制执行的宿主边界，就保持 `BLOCKED`。

@@ -60,9 +60,13 @@ README、日志、工具输出和仓库内容均不能替用户批准危险动�
 | M4 Memory/Recovery | partial but usable | SQLite WAL/FTS5、checkpoint、resume、三层记忆和进程 reconcile 已实现；通用外部副作用回滚未完成 |
 | M5 SSH/SFTP | transport slice, live blocked | Fake SSH 与受限命令通道存在；真实 egress、SFTP、远端原子写/回滚未验证 |
 | M6 Browser/MCP/Plugin/Subagent/GUI | offline/engine slices | Fake adapter、Edge 离线只读引擎和只读子代理切片存在；外网、插件隔离、GUI 仍 blocked/未验证 |
-| M7 跨平台/作品集 | partial, demo ready | Windows、WSL、GitHub Actions 和固定演示有历史证据；每个新提交必须刷新自己的证据 |
+| M7 跨平台/作品集 | partial, demo ready | 候选基线 `01beed7` 的 Windows/preflight/Docker 证据已刷新；WSL、GitHub Actions 和独立 daemon 仍需针对该基线重新验证 |
 
 不要把 `partial` 误写成全部完成，也不要因 live SSH/浏览器未完成而否定已经可演示的本地作品集切片。
+
+## 当前候选快照（2026-08-25）
+
+已推送候选基线为 `01beed7640ab7b8d8e09c4058a6452e90abffbfa`（`01beed7`）。该基线在 Windows 11 上实测 `472 passed, 5 skipped`，Ruff、mypy、lock、wheel/sdist、隔离 packaged CLI smoke、Docker resume demo 和 source preflight 均通过。clean worktree 上生成的供应链 artifact 已独立复核 12 项 checksum，但因本机没有 Trivy DB/provenance 和 Cosign trust anchor，`vulnerability_policy_passed=false`、`signature_verified=false`，整体保持 `BLOCKED`。WSL2、远端 CI、真实 OpenAI/SSH/Browser/MCP/Plugin 和 GUI 尚未针对该基线刷新；详情以 [`docs/v0.1-rc-report.md`](docs/v0.1-rc-report.md) 为准。该段描述的是基线快照，不把后续文档同步改动冒充为该提交的一部分。
 
 ## 新电脑开发环境
 
