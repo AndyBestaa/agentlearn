@@ -23,7 +23,7 @@ uv sync --extra dev
 uv run python scripts/resume_demo.py --backend docker --cleanup
 ```
 
-只有 Docker attestation、故障基线、精确工具链、一次 P3 审批恢复、回归测试、最小 diff 和审计链全部满足时，脚本才输出 `AsterCode resume demo: PASS`。`--backend fake` 是明确标注的无进程 CI fallback，不能作为沙箱执行证据。完整讲解和现场演示脚本见 [docs/demo-guide.md](docs/demo-guide.md)，简历表述见 [docs/resume-project.md](docs/resume-project.md)。
+只有 Docker attestation、故障基线、精确工具链、一次 P3 审批恢复、回归测试、最小 diff 和审计链全部满足时，脚本才输出 `AsterCode resume demo: PASS`。`--backend fake` 是明确标注的无进程 CI fallback，不能作为沙箱执行证据。完整讲解和现场演示脚本见 [docs/demo-guide.md](docs/demo-guide.md)，v0.1 的场景验收契约见 [docs/v0.1-acceptance-matrix.md](docs/v0.1-acceptance-matrix.md)，本轮阶段 1–4 实测结果见 [docs/v0.1-rc-report.md](docs/v0.1-rc-report.md)，简历表述见 [docs/resume-project.md](docs/resume-project.md)。
 
 ## 架构一览
 
@@ -329,7 +329,7 @@ uv run astercode memory forget MEMORY_ID --root .
 - 普通 Docker 构建产生的文件默认随临时副本删除。需要保留产物时，模型必须调用独立的 `process.exec_export` 并列出精确相对文件；审批后构建仍以非 root、零 capabilities 运行且不能直接写 root-only 导出区。只有成功命令的白名单普通文件会先进入 Docker 匿名卷，再由宿主从 tar 流逐项校验并在大小与 SHA-256 复核后发布到 `.astercode/artifacts/build_*`；越界路径、目录、链接、设备、重复/额外文件和超出总预算的导出都会拒绝。
 - P0 Git 查询使用固定 Git 可执行文件和干净环境，设置 `GIT_NO_LAZY_FETCH=1`，避免 partial/promisor clone 在 status/diff/log/show/branch 中隐式联网；仓库配置若请求 filter/diff/merge 外部驱动、hooks、fsmonitor、外部 attributes/excludes 文件或 include 会在启动 Git 前拒绝，diff/show 同时禁用 external diff/textconv。这不把 Git push 变成 P0；push 仍是 P3 且网络边界未验证时 blocked。
 - 当前 Windows 主机已验证 WSL2、Docker Desktop Linux engine、PowerShell 7 和固定 Python 镜像。AppContainer/Windows Sandbox/Hyper-V 仍不是已验证路径；SSH、浏览器和其他真实网络能力继续保持 `BLOCKED`。
-- `astercode doctor` 还会检查固定安装路径下的 `cosign`、`syft`、`trivy`。当前 Windows 已通过 WinGet 安装并被 doctor 识别为 `AVAILABLE`；这只证明工具存在，不等于镜像签名、SBOM 或漏洞扫描证据已经完成。固定 digest 只能防标签漂移，不能替代这些供应链证据。
+- `astercode doctor` 会分别报告固定安装路径下的 `cosign`、`syft`、`trivy` 是否 `DETECTED`，并将签名、SBOM、漏洞证据单列为 `NOT VERIFIED`；工具存在不等于操作完成。要生成绑定提交和配置哈希的本地证据，可运行 `uv run astercode supply-chain verify --root .`。默认不拉镜像、不更新 Trivy DB、不连接签名服务；`--update-trivy-db` 是单独的显式网络阶段。Trivy DB 即使新鲜且文件 hash 已记录，也只是本地 inventory，未配置可信 provenance 时漏洞 claim 仍为 false，命令会 fail-closed 返回 `BLOCKED`。固定 digest 只能防标签漂移，不能替代签名、SBOM 或漏洞扫描证据；`--allow-unverified-signature` 只适合开发采集。
 - `authorized_ssh_hosts = []` 时，运行时代码拒绝所有真实 SSH。现已实现默认关闭的系统 OpenSSH 命令通道：只有 `security.ssh.enabled=true`、非空精确 allowlist 和宿主注入的可信网络边界同时满足时才会装配；它固定使用系统绝对路径、`BatchMode`、专用 strict `known_hosts`、SSH agent/keychain，并禁用密码、配置文件、代理跳转、转发、X11 和连接复用。配置指纹必须由专用 `known_hosts` 中唯一的精确 host:port 公钥推导一致。真实上传、下载、远程 stat 和原子写回滚尚未实现，真实主机也未连接验证，因此 live SSH 继续 `BLOCKED`。审批动作仍绑定完整主机配置与 `known_hosts` SHA-256；远端停止无法确认时报告 `unknown`。
 - `BrowserTools` 现有可选的 Playwright + Microsoft Edge 只读后端，始终使用非持久化 context，不复用用户 profile，并关闭 JavaScript、下载、权限和 Service Worker。每个请求和重定向都做 allowlist、DNS 私网/metadata 复核，但这只是纵深防御，不是 OS egress sandbox。本机只验证了 `about:blank` 无网络启动；正常 CLI 默认 `engine="disabled"`，且没有宿主网络证明时 policy 和 executor 都拒绝外网导航。真实下载和表单提交仍关闭；Fake Browser 继续用于确定性测试。
 - 原生桌面 GUI 默认关闭，当前没有可用 live 适配器。
@@ -358,6 +358,7 @@ uv run ruff check src tests
 uv run mypy src tests
 uv lock --check
 uv pip check --python .venv\Scripts\python.exe
+uv run astercode supply-chain verify --root .
 ```
 
 需要显式配置 DeepSeek 环境变量时，可在一个不包含 `chat_cycle.py` 的临时工作区运行同会话写入回归；脚本只会对该文件申请六次单次审批，并在结束时验证它已被删除：

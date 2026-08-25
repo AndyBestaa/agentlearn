@@ -46,7 +46,7 @@ stateDiagram-v2
 
 所有公共入口（`aster`、`astercode`、`python -m astercode.cli`）都启用严格模式：启动目录是唯一授权根，宽根/系统树/UNC 被拒绝，项目文件不能开启 live Provider、SSH、网络、浏览器、插件、GUI 或外部状态路径；live 模型只接受用户环境的显式选择。
 
-入口在 `astercode.cli`；兼容命令为 `astercode`，快捷入口 `aster` 在无参数时注入 `chat`，有参数时保留完整命令面。命令包括 `init`、`doctor`、`run`、`chat`、`resume`、`status`、`kill`、`sessions`、`memory`、`config`、`permissions`、`audit` 和 `ssh hosts`。快捷对话最终把规范化启动目录绑定为唯一授权根，并在宿主终端内收集精确审批；普通对话文本不构成批准。新项目使用 `astercode.toml`，旧版 AsterCode `config.toml` 仅在识别到版本和产品字段时兼容，避免误读其他应用的通用配置。`config migrate` 默认只预览 `config_version=1` 规范化结果，只有 `--write` 才会在精确备份和并发冲突检查后原子替换源文件；旧格式由测试 fixture 覆盖，被 Git 忽略的机器本地配置不属于源码交接物。CLI 不直接拼接或执行模型给出的 shell；所有动作经过 registry、policy 和 gateway。
+入口在 `astercode.cli`；兼容命令为 `astercode`，快捷入口 `aster` 在无参数时注入 `chat`，有参数时保留完整命令面。命令包括 `init`、`doctor`、`run`、`chat`、`resume`、`status`、`kill`、`sessions`、`memory`、`config`、`permissions`、`audit`、`supply-chain verify` 和 `ssh hosts`。快捷对话最终把规范化启动目录绑定为唯一授权根，并在宿主终端内收集精确审批；普通对话文本不构成批准。新项目使用 `astercode.toml`，旧版 AsterCode `config.toml` 仅在识别到版本和产品字段时兼容，避免误读其他应用的通用配置。`config migrate` 默认只预览 `config_version=1` 规范化结果，只有 `--write` 才会在精确备份和并发冲突检查后原子替换源文件；旧格式由测试 fixture 覆盖，被 Git 忽略的机器本地配置不属于源码交接物。CLI 不直接拼接或执行模型给出的 shell；所有动作经过 registry、policy 和 gateway。
 
 `run --stream` 将 provider delta、工具生命周期和完成事件打印为经过脱敏的事件；交互 `chat` 只显示 provider/tool 的安全生命周期摘要，不把结构化 provider JSON 当作聊天文本。`/clear` 解除当前 session 绑定并开始新的对话上下文。对话历史使用有界压缩保留用户锚点和最近助手决策，避免长编码任务的内部轮次尾截断所有用户请求。`--replay` 只读取授权根目录内的 JSON 数组 fixture，禁止疑似秘密和过大输入。run 的默认预算是 40 rounds、100 tool calls、120,000 total tokens、100,000 input tokens、20,000 output tokens 和 3,600 秒；`--max-rounds`、`--max-tool-calls`、`--max-tokens`、`--max-input-tokens`、`--max-output-tokens`、`--max-elapsed-seconds` 可以只覆盖当前 run。
 
@@ -107,7 +107,7 @@ OpenAI client 固定 `https://api.openai.com/v1`，DeepSeek client 固定 `https
 - AppContainer、Windows Sandbox/Hyper-V、镜像签名/SBOM/扫描和跨进程 Windows Job handle/POSIX 恢复仍未验证。
 - WSL2 Ubuntu 2 已用独立 Python 3.12 venv 完成全量测试，包含真实 Docker/bash 的执行、无网络、超时/停止、恢复身份和受控产物导出；该证据适用于 WSL + Docker Desktop Linux engine，不外推到裸机 Linux或独立生产 daemon。
 - Windows 普通文件/目录 symlink、真实 junction/reparse、真实 Ctrl-Break，以及宿主帮助进程异常退出触发 Job `KILL_ON_JOB_CLOSE` 均已在开启开发者模式的当前主机回归。
-- `doctor` 通过固定安装路径探测 `cosign`、`syft`、`trivy`，缺失时显示 `NOT VERIFIED`；镜像 digest 固定不等于签名、SBOM 或漏洞扫描通过。
+- `doctor` 通过 OS 解析的固定安装路径探测 `cosign`、`syft`、`trivy`，显示 `DETECTED` 与独立的证据 `NOT VERIFIED`；`astercode supply-chain verify` 才会在本地精确 digest 上生成绑定 commit/config hash 的 SBOM/Trivy artifact，并对 Syft/Trivy 结构、DB `Version=2`/时间字段（当前 trivy-db v2 可省略 `Type`；存在时必须为整数 `1`）、文件 hash 和扫描前后稳定性做 fail-closed 检查。Trivy 文件 inventory 不提供可信 provenance，缺少额外策略或 Cosign trust anchor 时发布门禁仍为 `BLOCKED`。镜像 digest 固定不等于签名、SBOM 或漏洞扫描通过。
 
 这些能力没有 verified adapter 时必须保持 `blocked` 或 `LIVE INTEGRATION NOT VERIFIED`，不能仅靠 prompt 放行。
 

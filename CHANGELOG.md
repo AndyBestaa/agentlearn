@@ -6,6 +6,7 @@
 
 ### Added
 
+- 新增显式 `supply-chain verify` 证据流程：默认只使用本地 Docker daemon 和精确 RepoDigest，绑定 Git commit/配置 hash，生成字段级绑定的 Syft JSON/SPDX、工具版本及前后 SHA-256、Trivy DB 文件 inventory、分离日志和 `SHA256SUMS`；Trivy DB 更新必须通过 `--update-trivy-db` 单独开启，缺少可信 DB provenance 或预批准 Cosign 信任锚时发布门禁 fail-closed，`signature_verified`/`vulnerability_policy_passed` 保持 `false`。`doctor` 同时将工具 `DETECTED` 与实际证据 `NOT VERIFIED` 分开显示。
 - 交互体验增强：`chat` 新增 Claude Code 风格的 `/clear` 会话重置、Fake 模型的明确 key 状态和脱敏生命周期进度；宿主显示 provider/tool 的开始、重试和完成摘要，不输出结构化模型 JSON。长任务上下文改为保留用户锚点并按字符/条目有界压缩；新增 deterministic 多轮代码读取、精确审批、修改、验证和同 session follow-up 回归。
 - 新增根目录 `AI_AGENT_START.md` 作为跨模型、跨对话的稳定统一入口：下一开发助手只需先阅读该文件，即会按只读检查、权威文档路由、权限边界、开发循环和验证门恢复项目上下文；易过期的里程碑数字仍由 `HANDOFF.md` 和实施计划维护。
 - 新增根目录 `HANDOFF.md` 作为跨电脑和跨 AI 编程代理的详细交接文档：记录 M0-M7 快照、必读顺序、无真实 key 质量门、推荐后续任务和可复制的启动指令，使后续开发不依赖当前 Codex 对话历史。

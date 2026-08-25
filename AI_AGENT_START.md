@@ -26,6 +26,8 @@ git remote -v
 python scripts/portability_preflight.py --root . --profile source
 ```
 
+`supply-chain verify` 默认只使用本地精确镜像和已有漏洞数据库；它记录目标提交与所选配置 hash，要求 Syft/Trivy 输出字段级绑定，并对 Trivy DB 文件做新鲜度、类型和 hash inventory。缺少 Trivy DB、可信 DB provenance 或 Cosign 信任锚时必须如实报告 `BLOCKED`/`NOT VERIFIED`，不能把工具检测或 digest 固定写成扫描、SBOM 或签名通过。数据库更新和真实签名验证属于单独的外部授权阶段；`--allow-unverified-signature` 仅用于开发采集。
+
 然后按顺序完整阅读：
 
 1. [`AGENTS.md`](AGENTS.md)：工程约定和项目内安全边界。
@@ -33,6 +35,8 @@ python scripts/portability_preflight.py --root . --profile source
 3. [`docs/implementation-plan.md`](docs/implementation-plan.md)：逐里程碑完成项、未完成项和验收证据。
 4. [`docs/architecture.md`](docs/architecture.md) 与 [`docs/threat-model.md`](docs/threat-model.md)：模块关系及强制安全边界。
 5. [`docs/release-checklist.md`](docs/release-checklist.md)：候选提交需要重新执行的质量门。
+
+若要核对本轮阶段 1–4 的真实候选结果，再阅读 [`docs/v0.1-rc-report.md`](docs/v0.1-rc-report.md)；其中的数字只属于报告所绑定的当前工作树，不能跨提交继承。
 
 如果工作区存在未提交修改，不要覆盖、删除、reset、clean、提交或暂存它们。先识别来源和范围，并向用户报告；只有得到明确指令后才能处理。
 
@@ -99,6 +103,7 @@ uv run mypy src tests
 uv lock --check
 uv build
 uv run python scripts/package_smoke.py
+uv run astercode supply-chain verify --root .
 python scripts/portability_preflight.py --root . --profile source
 ```
 

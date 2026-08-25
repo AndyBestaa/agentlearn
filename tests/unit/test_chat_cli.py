@@ -10,6 +10,8 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from astercode import cli
+from astercode.config import AppConfig, SandboxBackend
+from astercode.tools.docker_process import DockerSandboxAttestation
 
 
 def _approval_request(root: Path) -> dict[str, Any]:
@@ -40,6 +42,52 @@ def test_terminal_safe_escapes_control_and_bidi_characters() -> None:
     assert rendered == r"before\x1b[2J\x0dafter\u202e.txt"
     assert "\x1b" not in rendered
     assert "\u202e" not in rendered
+
+
+def test_doctor_separates_tool_detection_from_supply_chain_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    app_config: AppConfig,
+) -> None:
+    data = app_config.model_dump(mode="python")
+    data["security"]["process"]["sandbox_backend"] = SandboxBackend.CONTAINER
+    config = AppConfig.model_validate(data)
+    output = StringIO()
+    monkeypatch.setattr(
+        cli,
+        "console",
+        Console(file=output, force_terminal=False, color_system=None, width=220),
+    )
+    monkeypatch.setattr(cli, "_config", lambda _root: config)
+    monkeypatch.setattr(
+        "astercode.tools.docker_process.discover_trusted_docker",
+        lambda: Path("C:/trusted/docker.exe"),
+    )
+    monkeypatch.setattr(
+        "astercode.tools.docker_process.discover_trusted_image_tool",
+        lambda name: Path(f"C:/trusted/{name}.exe"),
+    )
+    monkeypatch.setattr(
+        "astercode.tools.docker_process.attest_docker_sandbox",
+        lambda **_kwargs: DockerSandboxAttestation(
+            executable=Path("C:/trusted/docker.exe"),
+            configured_image=config.security.process.container_image,
+            image_digest=config.security.process.container_image,
+            image_id="sha256:" + "a" * 64,
+        ),
+    )
+
+    cli.doctor(root=app_config.project_root)
+
+    rendered = output.getvalue()
+    assert "cosign executable" in rendered
+    assert "syft executable" in rendered
+    assert "trivy executable" in rendered
+    assert rendered.count("DETECTED") >= 3
+    assert "image signature verification" in rendered
+    assert "SBOM generation" in rendered
+    assert "vulnerability scanning" in rendered
+    assert rendered.count("NOT VERIFIED") >= 3
+    assert "executable detection is not operation evidence" in rendered
 
 
 def test_stream_event_escapes_terminal_controls(monkeypatch) -> None:
@@ -156,6 +204,62 @@ def test_chat_result_deduplicates_tool_already_shown_by_live_progress(monkeypatc
     assert "工具 fs.read" not in rendered
     assert "Aster> 已验证。" in rendered
     assert "✓ 已完成" in rendered
+
+
+def test_chat_result_renders_bounded_plan_and_verification_handoff(monkeypatch) -> None:
+    output = StringIO()
+    monkeypatch.setattr(
+        cli,
+        "console",
+        Console(file=output, force_terminal=False, color_system=None, width=220),
+    )
+
+    cli._print_chat_result(
+        {
+            "status": "completed",
+            "plan": ["inspect", "fix", "verify"],
+            "completed": ["inspect", "fix"],
+            "pending": ["verify"],
+            "active_files": ["calculator.py"],
+            "next_action": "run the focused test",
+            "messages": ["已应用修复。"],
+            "tool_results": [
+                {"action_id": "action_read", "tool": "fs.read", "status": "completed"},
+                {"action_id": "action_patch", "tool": "fs.apply_patch", "status": "completed"},
+                {
+                    "action_id": "action_diff",
+                    "tool": "git.diff",
+                    "status": "completed",
+                    "stdout": "diff --git a/calculator.py b/calculator.py\n--- a/calculator.py\n+++ b/calculator.py\n-    return left - right\n+    return left + right\n",
+                },
+            ],
+            "test_status": [
+                {"action_id": "action_read", "status": "completed", "verified": True},
+                {"action_id": "action_patch", "status": "failed", "verified": False},
+            ],
+            "blockers": [],
+        },
+        set(),
+    )
+
+    rendered = output.getvalue()
+    assert "本轮摘要" in rendered
+    assert "inspect → fix → verify" in rendered
+    assert "已完成" in rendered
+    assert "待处理" in rendered
+    assert "calculator.py" in rendered
+    assert "fs.read：通过" in rendered
+    assert "fs.apply_patch：未通过（failed）" in rendered
+    assert "差异" in rendered
+    assert "1 个文件 · +1/-1 行" in rendered
+    assert "run the focused test" in rendered
+    assert "{\"action_id\"" not in rendered
+
+
+def test_chat_summary_drops_complex_values_and_bounds_untrusted_text() -> None:
+    values = cli._chat_summary_values([{"secret": "hidden"}, "ok\x1b" + ("x" * 300)])
+
+    assert values == [r"ok\x1b" + ("x" * 173) + "…"]
 
 
 def test_chat_status_is_a_compact_summary(monkeypatch) -> None:

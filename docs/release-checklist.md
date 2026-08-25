@@ -1,6 +1,8 @@
 # AsterCode 发布检查清单
 
-本清单用于准备作品集/简历演示版本。旧提交的测试数字和绿色 CI 不能自动继承到新提交；每条完成项都必须绑定目标 commit 和实际命令输出。
+本清单用于准备作品集/简历演示版本。旧提交的测试数字和绿色 CI 不能自动继承到新提交；每条完成项都必须绑定目标 commit 和实际命令输出。v0.1 的场景级验收定义与 fake/Docker 证据边界见 [v0.1 验收矩阵](v0.1-acceptance-matrix.md)，本清单中的发布门槛应与该矩阵保持一致。
+
+本轮阶段 1–4 的本地候选实测记录见 [v0.1 RC 候选报告](v0.1-rc-report.md)。报告中的 `--allow-dirty`、本地 Docker 和供应链 `BLOCKED` 状态必须在目标提交后重新核对，不能直接勾选发布项。
 
 ## 1. 冻结范围
 
@@ -122,6 +124,13 @@ uv run python scripts/resume_demo.py --backend docker --cleanup
 - [ ] `doctor` 报告 Docker 固定镜像和 `cosign`/`syft`/`trivy` 可用性。
 - [ ] 固定 RepoDigest 只表示内容寻址，不单独宣称签名可信、SBOM 或漏洞扫描通过。
 - [ ] 若发布记录声称签名/SBOM/漏洞扫描，附实际命令、工具版本、离线/在线数据库状态和输出 artifact。
+- [ ] `uv run astercode supply-chain verify --root .` 默认只使用本地 Docker daemon、精确 RepoDigest 和已有 Trivy DB；它不拉镜像、不更新 DB、不连接签名服务。
+- [ ] 证据目录包含绑定目标 commit/config hash 的 `manifest.json`、分离的 stdout/stderr、SBOM、Trivy JSON（若运行）和 `SHA256SUMS`；四个 claim (`content_pinned`、`sbom_generated`、`vulnerability_policy_passed`、`signature_verified`) 独立记录。
+- [ ] `--update-trivy-db` 只能作为单独获批的网络阶段；记录 DB 来源、更新时间、最大允许年龄、severity、unfixed 和退出策略。缺 DB 或过期必须为 `NOT VERIFIED/BLOCKED`。
+- [ ] Trivy DB 必须有 `Version=2`、`UpdatedAt`/`DownloadedAt`/`NextUpdate`、`metadata.json` 和独立的 `trivy.db`；当前 trivy-db v2 可省略 `Type`，若兼容旧 producer 提供 `Type`/`type`，则必须是整数 `1`。记录两者 SHA-256/大小和扫描前后复核。该清单是本地 inventory，不是可信 DB provenance；没有另外批准的 provenance 策略时 `vulnerability_policy_passed=false`，发布门禁必须 `BLOCKED`。
+- [ ] Cosign 必须绑定预先批准的公钥指纹，或精确 certificate identity + OIDC issuer + transparency-log/bundle 证据；没有信任锚时保持 `signature_verified=false`。
+- [ ] 缺少签名或数据库可信 provenance 时默认命令返回非零；`--allow-unverified-signature` 仅可用于开发证据采集，不能勾选发布通过。
+- [ ] 配置的 mirror reference、实际 RepoDigest 和 Cosign 查询 reference 分开记录；digest 相等不等于镜像已签名。
 - [ ] README、HANDOFF、architecture、implementation-plan、threat-model、demo-guide、windows-migration、resume-project、CHANGELOG 相互一致。
 - [ ] README 中的安装、doctor、Demo、测试和 packaged CLI 命令均已在目标提交运行。
 
@@ -146,5 +155,10 @@ packaged_cli_smoke: <actual result>
 resume_demo_docker: <PASS/FAIL + evidence path>
 live_provider: <provider/model/session or NOT VERIFIED>
 live_ssh_browser_gui: NOT VERIFIED / BLOCKED
+supply_chain_manifest: <path + SHA-256>
+container_image: <configured ref + resolved digest>
+syft_sbom: <PASS/FAIL/NOT VERIFIED + format + artifact SHA/path>
+trivy_scan: <PASS/FAIL/NOT VERIFIED + DB timestamp + policy + artifact SHA/path>
+cosign_verify: <VERIFIED/NOT VERIFIED + identity/issuer or key fingerprint + tlog/bundle>
 known_risks: <remaining risks>
 ```

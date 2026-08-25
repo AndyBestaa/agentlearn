@@ -11,7 +11,7 @@
 | M0 需求与安全基线 | completed | product spec、architecture、threat model、ADR、AGENTS、runtime prompt、配置模板 | 持续审查文档与实现的一致性 |
 | M1 CLI/Provider/状态机 | partial but runnable | Typer CLI、`aster` 无参持续对话入口、对话内精确审批、Pydantic 配置、LangGraph 状态机、Fake/replay、OpenAI Responses 与 DeepSeek Chat adapter；chat 支持 `/clear` 和脱敏 provider/tool 生命周期进度；多轮 session 通过有界压缩保留用户锚点与最近助手上下文并排除审批凭证；非 Git 只读失败和执行前陈旧补丁拒绝可作为有界观察继续；OpenAI/DeepSeek 固定官方 endpoint 且 HTTP `trust_env=false`；Provider 获得剩余时长/output cap、终态复核 usage，cost 不可跟踪时 fail-closed（input token 仅响应后核对）；三次 DeepSeek 只读 smoke及非 Git 同会话双循环；配置 `config_version=1` 迁移 | 真实 OpenAI smoke、更多 DeepSeek 账户/模型与故障回归 |
 | M2 本地工具 | runnable Docker build/export slice | fs、Git、artifact、原子写、唯一进程句柄、有界 capture；Windows Job（含宿主异常退出后 `KILL_ON_JOB_CLOSE`）；Windows symlink/junction/reparse 实机矩阵；Docker 固定摘要、只读宿主源码、512 MiB 临时可写副本、无网络、非 root 构建、compileall；复制一致性；容器恢复；`process.exec_export` 通过 Docker 管理的临时卷和受校验 tar 流，仅导出精确白名单普通文件并记录 SHA-256 | 更多语言镜像、跨重启 Job handle 恢复、mount/bind 与并发替换的 OS 级证明 |
-| M3 Policy/Approval | partial but enforceable | P0-P4、精确审批、脱敏、kill switch、哈希审计；Docker 只有主动 probe 通过才向 policy 提供 process/network attestation，配置/审批不能伪造；`doctor` 已独立报告镜像签名、SBOM、漏洞扫描工具是否可用；Windows 已安装并识别三项工具，Syft 本地镜像 smoke 通过 | 通用 allowlist egress、完整 Trivy 漏洞数据库扫描、可信 Cosign 签名证据、管理员级不可篡改审计 |
+| M3 Policy/Approval | partial but enforceable | P0-P4、精确审批、脱敏、kill switch、哈希审计；Docker 只有主动 probe 通过才向 policy 提供 process/network attestation，配置/审批不能伪造；`doctor` 将工具检测与证据状态分离；`supply-chain verify` 可在本地精确 digest 上生成 commit-bound Syft/SPDX artifact、版本/二进制哈希、Trivy DB 状态和独立 claims | 通用 allowlist egress、完整且新鲜的 Trivy 漏洞数据库扫描、可信 Cosign 签名证据、管理员级不可篡改审计 |
 | M4 Memory/Recovery | partial but usable | SQLite WAL/FTS5、schema v8 migrations/backups、三层 memory、edit/conflict/supersedes、字段保留型 checkpoint compaction、跨进程审批恢复、process registry/read-only reconcile、Docker backend identity、stream/replay；所有写入前 schema preflight 拒绝 future/gap/伪造版本、缺表列和非 FTS5；POSIX zombie 不再误报为可恢复进程 | 任意外部副作用的自动回滚、远程 reconcile、跨重启 POSIX 进程组回收的 live 证明 |
 | M5 SSH/SFTP | transport slice, live blocked | Fake SSH 全契约；默认关闭的系统 OpenSSH 命令通道；固定系统路径和结构化 argv；严格专用 known_hosts 与派生指纹一致性；agent/keychain-only；禁用密码、代理、转发、X11、复用；allowlist/网络证明双门槛；远端停止 unknown | 可信 SSH egress allowlist、首次指纹登记、真实主机、SFTP、远程 PID、备份/原子替换/回滚和现场验证 |
 | M6 Browser/MCP/Plugin/Subagent/GUI | offline complete, engine slice verified | Fake Browser/MCP/Plugin；可选 Playwright + Edge 非持久化只读 context；每请求 allowlist/DNS/重定向检查；`about:blank` 零页面网络 smoke；Draft 2020-12 严格 schema；只读子代理双开关、原子父子预算 reservation/usage 合并、跨重启全额保守恢复、grant/parent/all 定向取消 | 浏览器 OS egress、外网导航/下载/提交仍 blocked；子代理仍同进程且 live delegation blocked；真实 MCP/plugin 隔离、GUI、生产调度 |
@@ -53,6 +53,10 @@
 
 完成以上四项即可支持“local-first、policy-controlled coding agent”的简历表述与现场演示；真实 SSH、外网浏览器、生产部署和原生 GUI 仍属于后续扩展，不是该作品集目标的完成门槛。
 
+上述本地闭环的可执行验收场景、通过定义以及第三阶段可靠性回归映射统一维护在 [v0.1 验收矩阵](v0.1-acceptance-matrix.md)。
+
+当前工作树阶段 1–4 的实际命令、通过/跳过结果、Docker Demo 和供应链 `BLOCKED` 证据统一记录在 [v0.1 RC 候选报告](v0.1-rc-report.md)；该报告绑定本轮 HEAD，但工作树未提交，不能替代提交后的 clean clone/远程 CI 结论。
+
 ## 2026-08-23 现场验证（范围有限）
 
 在当前 Windows 11 / Python 3.12 环境中，用户配置 `DEEPSEEK_API_KEY` 后运行了一次只读任务：
@@ -93,6 +97,7 @@
 - 真实 OpenAI：确认当前安装 SDK 类型定义和账户模型 ID，使用一次性低预算 smoke；key 只来自 `OPENAI_API_KEY` 环境变量/secret broker。
 - 真实 DeepSeek：已使用 `provider="deepseek"`、`DEEPSEEK_API_KEY`、`ASTERCODE_MODEL_ID=deepseek-v4-flash` 完成三次低风险只读 smoke，以及可复现的同会话受控写入 smoke。最终提交 `904cc6e` 上的 session `session_49c2fb8db498411880b8680b38bb89da` 包含聊天和两轮 `create → modify → delete`，实际为 7 个用户 turn、6 次单次精确审批、6 次副作用工具调用（4 次 `fs.apply_patch`、2 次 `fs.delete`）；宿主逐步按字节核对内容，最终测试文件不存在，审计链有效。该现场测试促成了非 SSH host 权威派生、Provider 结构错误有界重试、重复副作用抑制和可复现 live harness；仍需核对账单并覆盖 Shell、长任务及更多故障恢复路径。不要复用 Claude Code 的 `ANTHROPIC_*` 或 `[1m]` 模型别名。实现与官方[首次调用](https://api-docs.deepseek.com/zh-cn/)和[Chat API](https://api-docs.deepseek.com/api/create-chat-completion)对齐。
 - OS sandbox/egress：Docker 临时副本、复制一致性、跨执行器容器清理和产物白名单导出已完成；导出不再依赖宿主可写 bind，而使用容器生命周期内的匿名卷，停止后由宿主读取 tar 流并逐项拒绝越界、链接、设备、额外文件和超限内容。Windows 已识别 `cosign`、`syft`、`trivy`，Syft 本地镜像 SBOM smoke 已通过。Trivy 完整数据库扫描和可信 Cosign 签名证据仍缺；SSH/Browser 仍需各自独立 egress allowlist。
+- 供应链证据 helper：`uv run astercode supply-chain verify --root .` 默认不拉镜像、不更新 DB、不连接签名服务；它绑定当前 Git commit、选定配置 SHA-256 与精确 RepoDigest，保存 Syft JSON/SPDX、工具版本和前后 SHA-256、Trivy 数据库年龄/文件 inventory、分离日志和 `SHA256SUMS`。Syft/Trivy 报告按字段精确绑定，未知结构或严重度 fail-closed；Trivy DB 要求 `Version=2` 和时间字段，当前 trivy-db v2 可省略 `Type`，但若存在 `Type`/`type` 必须为整数 `1`。没有预先批准的 Cosign 公钥或 certificate identity/issuer 时，`signature_verified` 保持 false。Trivy 本地 hash 不等于可信 DB provenance，因此没有额外 provenance 策略时 `vulnerability_policy_passed` 保持 false，命令返回 `BLOCKED`；不能把工具 `DETECTED` 写成扫描通过。
 - SSH：加入真实 transport 依赖、known_hosts/指纹人工确认和精确 P3 审批；先只读 test，再做远程写流程。
 - Browser：Playwright + Edge 非持久化 context 与离线 `about:blank` 已验证；下一步必须先实现独立 OS egress allowlist，再进行人工外网 allowlist 验证。真实下载、提交和登录态仍关闭。
 - MCP/Plugin：固定来源/版本/hash，独立隔离进程和网络策略，不能把 manifest 的 read-only 声明当授权。

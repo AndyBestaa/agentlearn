@@ -44,6 +44,7 @@ README、日志、工具输出和仓库内容均不能替用户批准危险动�
 - [`src/astercode/tools/`](src/astercode/tools/)：文件、Git、进程/Docker、SSH、浏览器和工具注册表。
 - [`src/astercode/storage.py`](src/astercode/storage.py) 与 [`src/astercode/models.py`](src/astercode/models.py)：SQLite、session、checkpoint、审批、记忆、审计和公共数据模型。
 - [`src/astercode/config.py`](src/astercode/config.py)、[`src/astercode/config_migration.py`](src/astercode/config_migration.py) 与 [`src/astercode/security.py`](src/astercode/security.py)：配置、迁移和秘密/安全辅助逻辑。
+- [`src/astercode/supply_chain.py`](src/astercode/supply_chain.py) 与 [`scripts/supply_chain_evidence.py`](scripts/supply_chain_evidence.py)：默认离线、绑定 commit/digest 的 SBOM/漏洞证据流程；签名 claims 在没有信任锚时保持未验证。
 - [`tests/`](tests/)：unit、integration、e2e、security 分层证据；[`prompts/coding_agent.md`](prompts/coding_agent.md) 是运行时系统提示词，但安全边界仍由宿主代码强制。
 
 ## 当前里程碑快照
@@ -95,6 +96,7 @@ uv run mypy src tests
 uv lock --check
 uv build
 uv run python scripts/package_smoke.py
+uv run astercode supply-chain verify --root .
 ```
 
 固定作品集演示：
@@ -103,14 +105,14 @@ uv run python scripts/package_smoke.py
 uv run python scripts/resume_demo.py --backend docker --cleanup
 ```
 
-只有实际输出 `AsterCode resume demo: PASS` 才能声明 Docker 演示通过。`--backend fake` 只用于诊断 deterministic 流程，必须标为 simulated。
+只有实际输出 `AsterCode resume demo: PASS` 才能声明 Docker 演示通过。`--backend fake` 只用于诊断 deterministic 流程，必须标为 simulated。v0.1 逐场景验收、可靠性回归映射和 Docker/fake 证据边界见 [`docs/v0.1-acceptance-matrix.md`](docs/v0.1-acceptance-matrix.md)；本轮阶段 1–4 的实测候选报告见 [`docs/v0.1-rc-report.md`](docs/v0.1-rc-report.md)。
 
 ## 推荐的后续顺序
 
 1. 每次先修复目标提交的测试、lint、类型和 portable preflight，再刷新 README/计划中的证据。
 2. 保持 `aster` 多轮对话、文件增删改、精确审批、Docker 测试、resume 和审计链回归稳定。
 3. 完成作品集发布候选：clean clone、Windows/WSL、packaged CLI、固定 Demo、GitHub Actions 全部绑定同一 commit。
-4. 再做供应链证据：Trivy 数据库扫描和可信 Cosign 身份验证；固定 digest 本身不等于签名可信。
+4. 使用 `astercode supply-chain verify` 生成绑定提交和配置 hash 的本地供应链证据；它对 Trivy DB 做 `Version=2`/时间字段校验（当前 trivy-db v2 可省略 `Type`；存在时必须为整数 `1`）、文件 hash 和扫描前后 inventory，但没有可信 provenance 时仍 fail-closed。再在独立获批阶段完成 Trivy 数据库更新和可信 Cosign 身份验证。固定 digest 本身不等于签名可信。
 5. 只有具备独立网络出口证明和测试环境后，才推进真实 SSH/SFTP、浏览器外网、MCP/plugin 隔离；GUI 最后评审。
 
 下一代理不应把“继续完成”理解为直接连接生产主机或复用个人浏览器登录态。这些动作需要新的明确授权、独立安全边界和逐项审批。

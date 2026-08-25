@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -243,47 +244,117 @@ class DockerSandboxAttestation:
     engine_os: str = "linux"
 
 
-def _trusted_docker_candidates() -> tuple[Path, ...]:
+def _windows_image_tool_locations() -> tuple[Path, Path] | None:
+    """Return Local AppData and Program Files from Windows APIs, not env."""
+
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+
+        windll = getattr(ctypes, "windll", None)
+        if windll is None:
+            return None
+        local_buffer = ctypes.create_unicode_buffer(32_768)
+        program_files_buffer = ctypes.create_unicode_buffer(32_768)
+        # CSIDL_LOCAL_APPDATA and CSIDL_PROGRAM_FILES are resolved by the
+        # shell and cannot be redirected through inherited environment data.
+        if windll.shell32.SHGetFolderPathW(None, 0x001C, None, 0, local_buffer) != 0:
+            return None
+        if windll.shell32.SHGetFolderPathW(None, 0x0026, None, 0, program_files_buffer) != 0:
+            return None
+        local = Path(local_buffer.value)
+        program_files = Path(program_files_buffer.value)
+        if not local.is_absolute() or not program_files.is_absolute():
+            return None
+        return local, program_files
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def _path_has_reparse_point(path: Path) -> bool:
+    try:
+        metadata = path.lstat()
+    except OSError:
+        return True
+    if path.is_symlink() or bool(getattr(path, "is_junction", lambda: False)()):
+        return True
+    attributes = int(getattr(metadata, "st_file_attributes", 0))
+    return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+
+
+def _validated_fixed_executable(candidate: Path, allowed_root: Path) -> Path | None:
+    """Accept one regular, non-linked executable below an exact fixed root."""
+
+    lexical_root = Path(os.path.abspath(allowed_root))
+    lexical_candidate = Path(os.path.abspath(candidate))
+    try:
+        relative = lexical_candidate.relative_to(lexical_root)
+        resolved = candidate.resolve(strict=True)
+        metadata = resolved.stat()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if resolved != lexical_candidate or not resolved.is_file() or metadata.st_nlink != 1:
+        return None
+    if _path_has_reparse_point(lexical_root):
+        return None
+    current = lexical_root
+    for part in relative.parts:
+        current /= part
+        if _path_has_reparse_point(current):
+            return None
+    return resolved
+
+
+def _trusted_docker_candidates() -> tuple[tuple[Path, Path], ...]:
     if os.name == "nt":
-        local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-        program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+        locations = _windows_image_tool_locations()
+        if locations is None:
+            return ()
+        local, program_files = locations
         return (
-            local / "Programs" / "DockerDesktop" / "resources" / "bin" / "docker.exe",
-            program_files / "Docker" / "Docker" / "resources" / "bin" / "docker.exe",
+            (
+                local / "Programs" / "DockerDesktop" / "resources" / "bin" / "docker.exe",
+                local / "Programs" / "DockerDesktop",
+            ),
+            (
+                program_files / "Docker" / "Docker" / "resources" / "bin" / "docker.exe",
+                program_files / "Docker",
+            ),
         )
-    return (Path("/usr/bin/docker"), Path("/usr/local/bin/docker"))
+    return (
+        (Path("/usr/bin/docker"), Path("/usr/bin")),
+        (Path("/usr/local/bin/docker"), Path("/usr/local/bin")),
+    )
 
 
 def discover_trusted_docker() -> Path | None:
     """Return only a Docker CLI from a fixed installation location."""
 
-    for candidate in _trusted_docker_candidates():
-        try:
-            resolved = candidate.expanduser().resolve(strict=True)
-        except OSError:
-            continue
-        if resolved.is_file():
+    for candidate, allowed_root in _trusted_docker_candidates():
+        if resolved := _validated_fixed_executable(candidate, allowed_root):
             return resolved
     return None
 
 
-def discover_trusted_image_tool(name: str) -> Path | None:
-    """Find an optional SBOM/signature scanner without trusting PATH."""
-
-    if not re.fullmatch(r"[a-z][a-z0-9_-]{1,31}", name):
-        raise ValueError("invalid image security tool name")
-    candidates: list[Path] = []
+def _trusted_image_tool_candidates(name: str) -> tuple[tuple[Path, Path], ...]:
+    candidates: list[tuple[Path, Path]] = []
     if os.name == "nt":
-        local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-        program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+        locations = _windows_image_tool_locations()
+        if locations is None:
+            return ()
+        local, program_files = locations
+        local_root = local / "Programs" / name
+        program_root = program_files / name
         candidates.extend(
             [
-                local / "Programs" / name / f"{name}.exe",
-                program_files / name / f"{name}.exe",
+                (local_root / f"{name}.exe", local_root),
+                (program_root / f"{name}.exe", program_root),
             ]
         )
-        # WinGet uses a fixed user-owned package root. Inspect only known
-        # package prefixes and expected executable names; never trust PATH.
+        # WinGet uses a known package root below OS-resolved Local AppData.
+        # The files remain user-owned, so discovery means DETECTED rather than
+        # cryptographic trust; evidence records the executable SHA-256/version.
         winget_root = local / "Microsoft" / "WinGet" / "Packages"
         winget_specs = {
             "cosign": ("Sigstore.Cosign_Microsoft.Winget.Source_*", "cosign-windows-amd64.exe"),
@@ -292,15 +363,27 @@ def discover_trusted_image_tool(name: str) -> Path | None:
         }
         if name in winget_specs:
             package_glob, executable_name = winget_specs[name]
-            candidates.extend(winget_root.glob(f"{package_glob}/{executable_name}"))
+            candidates.extend(
+                (candidate, winget_root)
+                for candidate in winget_root.glob(f"{package_glob}/{executable_name}")
+            )
     else:
-        candidates.extend([Path("/usr/bin") / name, Path("/usr/local/bin") / name])
-    for candidate in candidates:
-        try:
-            resolved = candidate.resolve(strict=True)
-        except OSError:
-            continue
-        if resolved.is_file():
+        candidates.extend(
+            [
+                (Path("/usr/bin") / name, Path("/usr/bin")),
+                (Path("/usr/local/bin") / name, Path("/usr/local/bin")),
+            ]
+        )
+    return tuple(candidates)
+
+
+def discover_trusted_image_tool(name: str) -> Path | None:
+    """Find an optional image tool below an OS-resolved fixed location."""
+
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{1,31}", name):
+        raise ValueError("invalid image security tool name")
+    for candidate, allowed_root in _trusted_image_tool_candidates(name):
+        if resolved := _validated_fixed_executable(candidate, allowed_root):
             return resolved
     return None
 
@@ -309,8 +392,6 @@ def _docker_host_env(executable: Path) -> dict[str, str]:
     allowed = {
         "SystemRoot",
         "WINDIR",
-        "TEMP",
-        "TMP",
     }
     env = {key: value for key, value in os.environ.items() if key in allowed}
     env["PATH"] = str(executable.parent)

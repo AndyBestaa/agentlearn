@@ -38,16 +38,73 @@ permissions_app = typer.Typer(help="Inspect runtime permission policy")
 ssh_app = typer.Typer(help="Inspect explicitly authorized SSH hosts")
 ssh_hosts_app = typer.Typer(help="SSH host operations")
 audit_app = typer.Typer(help="Verify local append-only audit evidence")
+supply_chain_app = typer.Typer(help="Generate explicit, commit-bound container supply-chain evidence")
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(memory_app, name="memory")
 app.add_typer(config_app, name="config")
 app.add_typer(permissions_app, name="permissions")
 app.add_typer(ssh_app, name="ssh")
 app.add_typer(audit_app, name="audit")
+app.add_typer(supply_chain_app, name="supply-chain")
 ssh_app.add_typer(ssh_hosts_app, name="hosts")
 
 console = Console()
 _STRICT_SHORTCUT = False
+
+
+@supply_chain_app.command("verify")
+def supply_chain_verify(
+    root: Path = typer.Option(Path.cwd(), "--root", file_okay=False),
+    config_file: Path | None = typer.Option(None, "--config", dir_okay=False),
+    output_dir: Path | None = typer.Option(None, "--output-dir", file_okay=False),
+    update_trivy_db: bool = typer.Option(
+        False,
+        "--update-trivy-db",
+        help="Explicitly allow a Trivy vulnerability DB download/update",
+    ),
+    max_db_age_hours: float = typer.Option(48.0, "--max-db-age-hours", min=0.01, max=720.0),
+    timeout_seconds: float = typer.Option(600.0, "--timeout-seconds", min=0.01, max=3_600.0),
+    allow_dirty: bool = typer.Option(False, "--allow-dirty", help="Development-only dirty-tree evidence"),
+    allow_unverified_signature: bool = typer.Option(
+        False,
+        "--allow-unverified-signature",
+        help="Development-only: permit a partial result when Cosign trust evidence is absent",
+    ),
+) -> None:
+    """Create local SBOM/vulnerability evidence; Cosign stays unverified without a trust policy."""
+
+    from .supply_chain import generate_supply_chain_evidence
+
+    try:
+        workspace = validate_strict_workspace_root(root)
+    except ConfigError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    try:
+        result = generate_supply_chain_evidence(
+            workspace,
+            config_file=config_file,
+            output_directory=output_dir,
+            update_trivy_db=update_trivy_db,
+            max_db_age_hours=max_db_age_hours,
+            timeout_seconds=timeout_seconds,
+            allow_dirty=allow_dirty,
+            allow_unverified_signature=allow_unverified_signature,
+        )
+    except (ConfigError, OSError, RuntimeError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print_json(
+        data={
+            "overall_status": result.manifest.overall_status,
+            "target_commit": result.manifest.target_commit,
+            "working_tree_clean": result.manifest.working_tree_clean,
+            "claims": result.manifest.claims.model_dump(mode="json"),
+            "manifest": str(result.manifest_path),
+            "checksums": str(result.checksums_path),
+        }
+    )
+    console.print("Cosign signature: NOT VERIFIED (no approved trust policy was supplied)")
+    if result.exit_code:
+        raise typer.Exit(code=result.exit_code)
 
 
 def _run_sync(coro: Coroutine[Any, Any, Any]) -> Any:
@@ -410,9 +467,20 @@ def doctor(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False)) -> 
                 executable = discover_trusted_image_tool(tool)
                 checks.append(
                     (
+                        f"{tool} executable",
+                        "DETECTED" if executable is not None else "NOT DETECTED",
+                        str(executable) if executable is not None else f"fixed-location {tool} executable not found",
+                    )
+                )
+                checks.append(
+                    (
                         purpose,
-                        "AVAILABLE" if executable is not None else "NOT VERIFIED",
-                        str(executable) if executable is not None else f"trusted {tool} executable not installed",
+                        "NOT VERIFIED",
+                        (
+                            "executable detection is not operation evidence; run the explicit supply-chain evidence workflow"
+                            if executable is not None
+                            else f"cannot verify without a detected {tool} executable"
+                        ),
                     )
                 )
         else:
@@ -727,6 +795,121 @@ def _chat_status_label(status: object) -> str:
     return f"{translated}（{raw}）"
 
 
+def _chat_summary_values(value: object, *, limit: int = 4, item_limit: int = 180) -> list[str]:
+    """Return a bounded, terminal-safe list for the interactive turn summary.
+
+    Plan and file names ultimately come from provider/state data.  Keep the
+    display useful in a small terminal without allowing an unexpectedly large
+    or control-bearing value to take over the prompt.
+    """
+
+    if not isinstance(value, list):
+        return []
+    rendered: list[str] = []
+    for item in value[-limit:]:
+        if not isinstance(item, (str, int, float, bool)):
+            continue
+        text = _terminal_safe(item)
+        if len(text) > item_limit:
+            text = text[: item_limit - 1] + "…"
+        if text:
+            rendered.append(text)
+    return rendered
+
+
+def _chat_verification_summary(
+    test_status: object,
+    tool_results: list[Mapping[str, Any]],
+) -> str | None:
+    """Summarize bounded host verification evidence without dumping JSON."""
+
+    if not isinstance(test_status, list) or not test_status:
+        return None
+    tools_by_action = {
+        str(item.get("action_id")): str(item.get("tool", "action"))
+        for item in tool_results
+        if item.get("action_id")
+    }
+    entries: list[str] = []
+    for item in test_status[-4:]:
+        if not isinstance(item, Mapping):
+            continue
+        action_id = str(item.get("action_id", ""))
+        label = tools_by_action.get(action_id, action_id or "action")
+        if item.get("verified") is True:
+            state = "通过"
+        elif item.get("status") in {"failed", "timeout", "unknown"}:
+            state = f"未通过（{item.get('status')}）"
+        else:
+            state = "未验证"
+        entries.append(f"{_terminal_safe(label)}：{_terminal_safe(state)}")
+    if not entries:
+        return None
+    return " · ".join(entries)
+
+
+def _chat_diff_summary(tool_results: list[Mapping[str, Any]]) -> str | None:
+    """Summarize a completed Git diff without printing unbounded source text."""
+
+    for item in reversed(tool_results):
+        if item.get("tool") != "git.diff" or item.get("status") != "completed":
+            continue
+        raw_diff = item.get("stdout")
+        if not isinstance(raw_diff, str):
+            return "已完成（未返回 diff 文本）"
+        lines = raw_diff.splitlines()
+        additions = sum(1 for line in lines if line.startswith("+") and not line.startswith("+++"))
+        deletions = sum(1 for line in lines if line.startswith("-") and not line.startswith("---"))
+        files = {
+            line[6:]
+            for line in lines
+            if line.startswith("+++ b/") and len(line) > 6
+        }
+        file_text = f"{len(files)} 个文件" if files else "工作区变更"
+        return f"{file_text} · +{additions}/-{deletions} 行"
+    return None
+
+
+def _print_chat_turn_summary(result: Mapping[str, Any]) -> None:
+    """Render the high-signal plan/evidence handoff after one chat turn."""
+
+    plan = _chat_summary_values(result.get("plan"))
+    completed = _chat_summary_values(result.get("completed"))
+    pending = _chat_summary_values(result.get("pending"))
+    active_files = _chat_summary_values(result.get("active_files"))
+    raw_tool_results = result.get("tool_results", [])
+    tool_results = (
+        [item for item in raw_tool_results if isinstance(item, Mapping)]
+        if isinstance(raw_tool_results, list)
+        else []
+    )
+    verification = _chat_verification_summary(result.get("test_status"), tool_results)
+    diff_summary = _chat_diff_summary(tool_results)
+    next_action = result.get("next_action")
+    next_text = _terminal_safe(next_action) if next_action and str(next_action) != "none" else ""
+    if not any((plan, completed, pending, active_files, verification, diff_summary, next_text)):
+        return
+
+    table = Table(title="本轮摘要", show_header=False, box=None, pad_edge=False)
+    table.add_column(style="bold cyan", no_wrap=True)
+    table.add_column(overflow="fold")
+    if plan:
+        table.add_row(Text("计划"), Text(_terminal_safe(" → ".join(plan))))
+    if completed:
+        table.add_row(Text("已完成"), Text(_terminal_safe(" · ".join(completed))))
+    if pending:
+        table.add_row(Text("待处理"), Text(_terminal_safe(" · ".join(pending))))
+    if active_files:
+        table.add_row(Text("涉及文件"), Text(_terminal_safe(" · ".join(active_files))))
+    if verification:
+        table.add_row(Text("验证"), Text(verification))
+    if diff_summary:
+        table.add_row(Text("差异"), Text(_terminal_safe(diff_summary)))
+    if next_text:
+        table.add_row(Text("下一步"), Text(next_text))
+    console.print(table)
+
+
 def _print_chat_result(
     result: Mapping[str, Any],
     seen_actions: set[str],
@@ -780,6 +963,7 @@ def _print_chat_result(
     if isinstance(blockers, list):
         for blocker in blockers[-3:]:
             console.print(_terminal_safe(f"原因：{blocker}"), style="yellow", markup=False)
+    _print_chat_turn_summary(result)
 
 
 def _print_chat_status(record: Mapping[str, Any]) -> None:

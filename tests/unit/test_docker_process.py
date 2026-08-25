@@ -22,6 +22,8 @@ from astercode.tools.docker_process import (
     _docker_host_env,
     _fixed_container_options,
     _resolve_local_image,
+    _validated_fixed_executable,
+    _windows_image_tool_locations,
     discover_trusted_image_tool,
 )
 from astercode.tools.process import ProcessTools
@@ -222,10 +224,51 @@ def test_image_security_tool_discovery_does_not_trust_path(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("PATH", r"C:\untrusted")
-    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "empty-localappdata"))
+    monkeypatch.setattr(
+        "astercode.tools.docker_process._trusted_image_tool_candidates",
+        lambda _name: (),
+    )
     assert discover_trusted_image_tool("cosign") is None
     with pytest.raises(ValueError, match="invalid"):
         discover_trusted_image_tool("cosign.exe")
+
+
+def test_fixed_tool_candidate_rejects_links_and_hardlinks(tmp_path: Path) -> None:
+    allowed = tmp_path / "allowed"
+    outside = tmp_path / "outside"
+    allowed.mkdir()
+    outside.mkdir()
+    executable = allowed / "tool"
+    executable.write_bytes(b"tool")
+    assert _validated_fixed_executable(executable, allowed) == executable.resolve()
+
+    hardlink = allowed / "hardlink"
+    os.link(executable, hardlink)
+    assert _validated_fixed_executable(executable, allowed) is None
+    assert _validated_fixed_executable(hardlink, allowed) is None
+
+    target = outside / "target"
+    target.write_bytes(b"outside")
+    linked = allowed / "linked"
+    try:
+        linked.symlink_to(target)
+    except OSError as exc:
+        pytest.skip(f"file symlink unavailable: {exc}")
+    assert _validated_fixed_executable(linked, allowed) is None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows known folders are Windows-specific")
+def test_windows_image_tool_locations_ignore_environment_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "untrusted-local"))
+    monkeypatch.setenv("ProgramFiles", str(tmp_path / "untrusted-program-files"))
+
+    locations = _windows_image_tool_locations()
+
+    assert locations is not None
+    assert all(tmp_path not in location.parents and location != tmp_path for location in locations)
 
 
 def test_export_container_is_retained_until_artifacts_are_copied(
@@ -353,6 +396,8 @@ def test_docker_control_environment_drops_remote_and_proxy_overrides(
     assert "DOCKER_CONTEXT" not in env
     assert "DOCKER_CONFIG" not in env
     assert "HTTP_PROXY" not in env
+    assert "TEMP" not in env
+    assert "TMP" not in env
     assert env["PATH"] == str(tmp_path)
 
 
