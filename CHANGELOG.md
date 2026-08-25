@@ -58,6 +58,7 @@
 
 ### Fixed
 
+- 修复 Ubuntu GitHub Actions 的跨平台 mypy 回归：Windows 专属 `signal.CTRL_BREAK_EVENT` 现在通过受保护的运行时属性读取，POSIX 类型检查不再失败；本地 Windows 与 WSL 定向测试、Ruff 和 mypy 均通过。
 - 修复普通非 Git 新目录中 `git.status` 失败会提前结束任务的问题：无副作用、幂等只读失败现在作为有预算上限的观察反馈给模型；本地模型虚拟 cwd 标记由宿主安全绑定到唯一授权工作区，任意其他越界绝对路径仍拒绝。`fs.apply_patch` 仅在原上下文失败且去除单一展示分隔空格后能精确匹配当前文件时规范化 `- old`/`+ new`；已成功写入后的陈旧重复补丁在执行前被策略拒绝、无审批且无副作用，并可由模型继续完成回合。真实同会话双循环与确定性回归均覆盖这些路径。
 - 修复 DeepSeek 在普通新目录中提交 `fs.list(path="")` 时被误判为越界的问题：空字符串及精确的虚拟工作区标记只对 `fs.list/stat/read/search` 映射到宿主唯一授权工作区；写入、移动和删除继续拒绝空目标。真实 DeepSeek session `session_0925077d608240018fdb47a936e29a8a` 使用同样的空 path 完成一次 P0 `fs.list`，无 blocker、审批或副作用。
 - 改进内联解释器拒绝后的自动恢复：`process.exec` 工具契约明确要求运行已审查的工作区文件，不使用 `python -c`、`node -e` 或 `ruby -e`；精确的内联代码策略拒绝现在作为执行前、零副作用、有轮数预算的观察反馈给模型，使其可改用 `python file.py`，而用户拒绝、路径越界和专用工具绕过仍终止。真实 DeepSeek + Docker session `session_038b35bb629348e4aa6f9ce66d30063e` 验证第一条 `python -c` 被拒绝且零副作用，随后 `python inline_add.py` 经精确审批进入 filesystem/network sandbox，输出 `5` 并 completed。

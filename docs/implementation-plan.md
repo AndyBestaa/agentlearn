@@ -74,6 +74,7 @@
 - 配置迁移、memory conflict/poisoning、audit tamper detection 的主要文档与回归已完成；后续仅维护迁移兼容性和更多损坏数据库 fixture。
 - WSL2 Ubuntu 已用独立 Linux venv 跑通全量 `pytest`，其中包含 6 项真实 Docker/bash 沙箱测试；这证明 WSL Ubuntu + Docker Desktop Linux engine 组合，不等同于裸机 Linux、独立生产 daemon 或通用网络出口验收。
 - GitHub Actions Ubuntu job 已配置固定摘要镜像拉取和强制 live Docker 回归；`ASTERCODE_REQUIRE_LIVE_DOCKER=1` 会把缺失 attestation 从 skip 提升为失败。本机 Windows/WSL 强制模式均为 `6 passed`，但远端 Runner 只有推送后才能形成实际证据。
+- 首次运行该 job 时发现 Ubuntu mypy 无法静态解析 Windows 专属 `CTRL_BREAK_EVENT`；已改为受保护的跨平台属性读取，并在 Windows/WSL 定向测试及带 browser extra 的 WSL mypy 中复核。新的远端 CI 结果需等待下一次推送。
 
 ### B. 具备独立安全证据后再做 live adapter
 

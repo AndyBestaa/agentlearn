@@ -126,7 +126,11 @@ def test_real_chat_process_handles_console_break_without_traceback(tmp_path: Pat
         # that group with CTRL_BREAK_EVENT.
         time.sleep(2)
         assert proc.poll() is None, "chat process exited before console signal"
-        os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
+        # ``CTRL_BREAK_EVENT`` exists only on Windows; keep the module
+        # type-checkable on POSIX while the test itself remains Windows-only.
+        ctrl_break_event = getattr(signal, "CTRL_BREAK_EVENT", None)
+        assert isinstance(ctrl_break_event, int)
+        os.kill(proc.pid, ctrl_break_event)
         output, _ = proc.communicate(timeout=15)
 
         assert proc.returncode == 0, output
