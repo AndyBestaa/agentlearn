@@ -191,6 +191,53 @@ def test_kill_on_close_terminates_process_tree(tmp_path: Path) -> None:
             proc.wait(timeout=5)
 
 
+def test_job_kill_on_host_process_crash_prevents_cross_process_orphan(
+    tmp_path: Path,
+) -> None:
+    child_pid_file = tmp_path / "crash-child.pid"
+    sleeper = tmp_path / "sleeper.py"
+    sleeper.write_text("import time\ntime.sleep(120)\n", encoding="utf-8")
+    helper = tmp_path / "crashing_host.py"
+    helper.write_text(
+        "import os, pathlib, sys, time\n"
+        "from astercode.tools.process import ProcessTools\n"
+        "root = pathlib.Path(sys.argv[1])\n"
+        "tools = ProcessTools([root], max_processes=4, "
+        "sandbox_enforced=True, network_policy_enforced=True)\n"
+        "result = tools.start([sys.executable, sys.argv[2]], str(root), "
+        "allow_unsandboxed=True)\n"
+        "if result.status != 'completed': raise RuntimeError(result.error)\n"
+        "pathlib.Path(sys.argv[3]).write_text(str(result.metadata['pid']), "
+        "encoding='ascii')\n"
+        "time.sleep(0.25)\n"
+        "os._exit(23)\n",
+        encoding="utf-8",
+    )
+    host = subprocess.Popen(
+        [sys.executable, str(helper), str(tmp_path), str(sleeper), str(child_pid_file)],
+        cwd=str(tmp_path),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        creationflags=CREATE_NEW_PROCESS_GROUP,
+    )
+    child_pid: int | None = None
+    try:
+        child_pid = _wait_for_pid_file(child_pid_file)
+        identity = ProcessTools.process_identity(child_pid)
+        assert isinstance(identity, str)
+        host.wait(timeout=10)
+        assert host.returncode == 23
+        _wait_for_identity_change(child_pid, identity)
+    finally:
+        if host.poll() is None:
+            host.kill()
+            host.wait(timeout=5)
+        if child_pid is not None and ProcessTools.process_identity(child_pid) != "missing":
+            ProcessTools._run_windows_taskkill(child_pid)
+
+
 def test_process_tools_assigns_job_before_resuming(tmp_path: Path) -> None:
     result = ProcessTools(
         [tmp_path],

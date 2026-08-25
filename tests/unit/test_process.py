@@ -1,11 +1,35 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
+import time
 from pathlib import Path
+
+import pytest
 
 from astercode.tools import process as process_module
 from astercode.tools.process import ProcessTools
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX /proc zombie regression")
+def test_process_identity_treats_an_unreaped_zombie_as_stopped() -> None:
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            raw = Path(f"/proc/{proc.pid}/stat").read_text(encoding="ascii")
+            closing = raw.rfind(")")
+            fields = raw[closing + 2 :].split()
+            if fields and fields[0] == "Z":
+                break
+            time.sleep(0.02)
+        else:
+            raise AssertionError("child did not become an observable zombie")
+
+        assert ProcessTools.process_identity(proc.pid) == "missing"
+    finally:
+        proc.wait(timeout=5)
 
 
 def test_process_fails_closed_without_verified_sandbox(

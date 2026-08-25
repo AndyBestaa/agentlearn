@@ -1,3 +1,3 @@
-from .cli import app
+from .entrypoint import astercode_main
 
-app()
+astercode_main()

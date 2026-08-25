@@ -1,6 +1,6 @@
 # ADR 0005：Docker 临时可写进程沙箱
 
-- 状态：Accepted（M2/M3 Windows live slice）
+- 状态：Accepted（M2/M3 Windows + WSL2 live slice）
 - 日期：2026-08-23
 
 ## 背景
@@ -30,6 +30,6 @@ Windows Job Object 已证明进程树终止和部分资源限额，但不能隔�
 
 正面：Python/bash 无网络验证与需要写缓存/构建产物的命令可在临时副本运行；宿主源码保持只读；源目录复制前后和副本内容通过 SHA-256 清单核对；容器退出即丢弃副本；超时和 stop 会删除容器并终止宿主 Docker CLI 树；持久化的容器名/标签/镜像身份允许重启后精确清理；`doctor` 能显示实际 attestation。
 
-受控导出：普通 `process.exec` 的临时写入仍全部丢弃。只有独立的 `process.exec_export` 在精确审批后允许列出最多 16 个相对普通文件；受信包装器持有最小 SETUID/SETGID 能力，把构建命令降权运行并隔离导出目录，成功后才按总字节上限复制。宿主再次拒绝链接/额外文件，计算 SHA-256 后原子发布。
+受控导出：普通 `process.exec` 的临时写入仍全部丢弃。只有独立的 `process.exec_export` 在精确审批后允许列出最多 16 个相对普通文件。受信包装器只在读取 mode-0700 源快照、调整临时副本属主和降权时持有 `DAC_READ_SEARCH/CHOWN/SETUID/SETGID`；模型命令执行前显式清空并核验 effective/permitted/inheritable/ambient capabilities。成功后，包装器按总字节上限把白名单普通文件写入 root-only Docker 匿名卷。容器停止后宿主以 tar 流读取，不把容器直接写入宿主目录，并拒绝越界路径、链接、设备、重复或额外条目，计算 SHA-256 后原子发布。匿名卷随容器清理。
 
-负面：固定排除目录可能不适合所有项目；清单核对增加两次源码哈希开销且不是底层文件系统快照；导出当前仅支持普通文件，不支持目录、链接或增量回写；镜像只保证 Python 和 bash；镜像签名/SBOM/漏洞扫描、Docker daemon/管理员威胁、跨进程 Job/POSIX 恢复和真实终端信号矩阵仍未完成。SSH、浏览器和宿主网络不继承此证明。
+负面：固定排除目录可能不适合所有项目；清单核对增加两次源码哈希开销且不是底层文件系统快照；导出当前仅支持普通文件，不支持目录、链接或增量回写；镜像只保证 Python 和 bash；镜像签名/SBOM/完整漏洞扫描及 Docker daemon/管理员威胁仍未完成。Windows 真实 Ctrl-Break、宿主异常退出 Job close 和 WSL2 Docker 全量矩阵已通过，但跨重启 Job handle、POSIX 进程组、裸机 Linux、SSH、浏览器和宿主网络不继承此证明。

@@ -8,12 +8,12 @@
 | --- | --- | --- | --- |
 | M0 需求与安全基线 | completed | product spec、architecture、threat model、ADR、AGENTS、runtime prompt、配置模板 | 持续审查文档与实现的一致性 |
 | M1 CLI/Provider/状态机 | partial but runnable | Typer CLI、`aster` 无参持续对话入口、对话内精确审批、Pydantic 配置、LangGraph 状态机、Fake/replay、OpenAI Responses 与 DeepSeek Chat adapter；多轮 session 向模型渐进披露最近的用户/助手上下文但排除审批凭证；非 Git 只读失败和执行前陈旧补丁拒绝可作为有界观察继续；OpenAI/DeepSeek 固定官方 endpoint 且 HTTP `trust_env=false`；Provider 获得剩余时长/output cap、终态复核 usage，cost 不可跟踪时 fail-closed（input token 仅响应后核对）；三次 DeepSeek 只读 smoke及非 Git 同会话双循环；配置 `config_version=1` 迁移 | 真实 OpenAI smoke、更多 DeepSeek 账户/模型与故障回归 |
-| M2 本地工具 | runnable Docker build/export slice | fs、Git、artifact、原子写、唯一进程句柄、有界 capture；Windows Job；Docker 固定摘要、只读宿主源码、512 MiB 临时可写副本、无网络、非 root 构建、compileall；复制一致性；容器恢复；`process.exec_export` 仅在成功后按精确白名单/总大小上限导出普通文件并记录 SHA-256 | 更多语言镜像、跨进程 Job handle 恢复、Linux 原生与完整 symlink 矩阵 |
+| M2 本地工具 | runnable Docker build/export slice | fs、Git、artifact、原子写、唯一进程句柄、有界 capture；Windows Job（含宿主异常退出后 `KILL_ON_JOB_CLOSE`）；Windows symlink/junction/reparse 实机矩阵；Docker 固定摘要、只读宿主源码、512 MiB 临时可写副本、无网络、非 root 构建、compileall；复制一致性；容器恢复；`process.exec_export` 通过 Docker 管理的临时卷和受校验 tar 流，仅导出精确白名单普通文件并记录 SHA-256 | 更多语言镜像、跨重启 Job handle 恢复、mount/bind 与并发替换的 OS 级证明 |
 | M3 Policy/Approval | partial but enforceable | P0-P4、精确审批、脱敏、kill switch、哈希审计；Docker 只有主动 probe 通过才向 policy 提供 process/network attestation，配置/审批不能伪造；`doctor` 已独立报告镜像签名、SBOM、漏洞扫描工具是否可用；Windows 已安装并识别三项工具，Syft 本地镜像 smoke 通过 | 通用 allowlist egress、完整 Trivy 漏洞数据库扫描、可信 Cosign 签名证据、管理员级不可篡改审计 |
-| M4 Memory/Recovery | partial but usable | SQLite WAL/FTS5、schema v8 migrations/backups、三层 memory、edit/conflict/supersedes、字段保留型 checkpoint compaction、跨进程审批恢复、process registry/read-only reconcile、Docker backend identity、stream/replay；所有写入前 schema preflight 拒绝 future/gap/伪造版本、缺表列和非 FTS5 | 任意外部副作用的自动回滚、远程 reconcile、Linux/POSIX 旧 PID 回收的 live 证明 |
+| M4 Memory/Recovery | partial but usable | SQLite WAL/FTS5、schema v8 migrations/backups、三层 memory、edit/conflict/supersedes、字段保留型 checkpoint compaction、跨进程审批恢复、process registry/read-only reconcile、Docker backend identity、stream/replay；所有写入前 schema preflight 拒绝 future/gap/伪造版本、缺表列和非 FTS5；POSIX zombie 不再误报为可恢复进程 | 任意外部副作用的自动回滚、远程 reconcile、跨重启 POSIX 进程组回收的 live 证明 |
 | M5 SSH/SFTP | transport slice, live blocked | Fake SSH 全契约；默认关闭的系统 OpenSSH 命令通道；固定系统路径和结构化 argv；严格专用 known_hosts 与派生指纹一致性；agent/keychain-only；禁用密码、代理、转发、X11、复用；allowlist/网络证明双门槛；远端停止 unknown | 可信 SSH egress allowlist、首次指纹登记、真实主机、SFTP、远程 PID、备份/原子替换/回滚和现场验证 |
 | M6 Browser/MCP/Plugin/Subagent/GUI | offline complete, engine slice verified | Fake Browser/MCP/Plugin；可选 Playwright + Edge 非持久化只读 context；每请求 allowlist/DNS/重定向检查；`about:blank` 零页面网络 smoke；Draft 2020-12 严格 schema；只读子代理双开关、原子父子预算 reservation/usage 合并、跨重启全额保守恢复、grant/parent/all 定向取消 | 浏览器 OS egress、外网导航/下载/提交仍 blocked；子代理仍同进程且 live delegation blocked；真实 MCP/plugin 隔离、GUI、生产调度 |
-| M7 跨平台/发布 | partial | wheel、安装 smoke、README、配置和迁移备份、审计 verify、回归 fixture、Git Bash 兼容 smoke、本地性能基线；CLI Ctrl-C 显示及审批恢复中运行任务的进程树清理已回归；WSL2 Ubuntu 只读 compileall smoke 通过 | Linux 原生 OS sandbox/egress、完整终端信号矩阵和 live 集成矩阵 |
+| M7 跨平台/发布 | partial | wheel、安装 smoke、README、配置和迁移备份、审计 verify、回归 fixture、Git Bash 兼容 smoke、本地性能基线；真实 Windows Ctrl-Break、审批恢复取消、宿主崩溃 Job 清理均已回归；WSL2 Ubuntu 中 Python 3.12、bash、Docker Desktop Linux engine 与全量测试通过 | 裸机 Linux/独立 daemon、PowerShell 7 shell adapter、更多 live 集成矩阵 |
 
 ## 已完成的离线垂直链路
 
@@ -68,17 +68,18 @@
 ### A. 先完成、无需 API key 的工作
 
 - 已完成并回归 live smoke 暴露的审计一致性修复、delta batching、context compaction 和 `status=running` 生命周期同步；第二次低预算窄任务 smoke 已记录输入/输出 token，后续仍需用可比工作负载做回归并核对实际账单（若可见）。
-- 在 Windows 上为测试账户准备 symlink/junction/reparse 权限并运行安全回归；无法提供权限就保持测试跳过并报告。
-- Windows Job Object 父子树 close/stop、assignment-failure，以及审批恢复中运行任务的 Ctrl-C 等价取消与完整进程树清理已完成本机验证；继续增加真实终端信号注入、跨进程 Job handle 恢复、超时 unknown、SQLite 并发和恢复场景的 E2E 证据。
+- 当前 Windows 主机已开启开发者模式并完成普通文件/目录 symlink 与真实 junction/reparse 矩阵：根外链接读写拒绝，根内链接只读允许但写 traversal 拒绝，链接形式的工作区根也拒绝。该开关是本机测试前提，不是 AsterCode 自动改变的运行时权限。
+- Windows Job Object 父子树 close/stop、assignment-failure、审批恢复取消、真实 Ctrl-Break，以及宿主帮助进程异常退出后的 `KILL_ON_JOB_CLOSE` 清理均已完成本机验证；仍需跨重启持有/转移 Job handle 的更复杂方案。
 - 将 Fake SSH/Browser/MCP/Plugin/Subagent 测试纳入固定 CI 命令；所有 fixture 保证无网络和无秘密。
 - 配置迁移、memory conflict/poisoning、audit tamper detection 的主要文档与回归已完成；后续仅维护迁移兼容性和更多损坏数据库 fixture。
-- 在 Linux 或 PowerShell 7 主机上重复只读 doctor、pytest、ruff、mypy 和 CLI smoke；本机 WSL2 Ubuntu 已完成 Python/bash、项目挂载和 `compileall` 只读 smoke，但不等同于 Linux 原生 Docker/CLI 全量验收。
+- WSL2 Ubuntu 已用独立 Linux venv 跑通全量 `pytest`，其中包含 6 项真实 Docker/bash 沙箱测试；这证明 WSL Ubuntu + Docker Desktop Linux engine 组合，不等同于裸机 Linux、独立生产 daemon 或通用网络出口验收。
+- GitHub Actions Ubuntu job 已配置固定摘要镜像拉取和强制 live Docker 回归；`ASTERCODE_REQUIRE_LIVE_DOCKER=1` 会把缺失 attestation 从 skip 提升为失败。本机 Windows/WSL 强制模式均为 `6 passed`，但远端 Runner 只有推送后才能形成实际证据。
 
 ### B. 具备独立安全证据后再做 live adapter
 
 - 真实 OpenAI：确认当前安装 SDK 类型定义和账户模型 ID，使用一次性低预算 smoke；key 只来自 `OPENAI_API_KEY` 环境变量/secret broker。
 - 真实 DeepSeek：已使用 `provider="deepseek"`、`DEEPSEEK_API_KEY`、`ASTERCODE_MODEL_ID=deepseek-v4-flash` 完成三次低风险只读 smoke，以及可复现的同会话受控写入 smoke。最终提交 `904cc6e` 上的 session `session_49c2fb8db498411880b8680b38bb89da` 包含聊天和两轮 `create → modify → delete`，实际为 7 个用户 turn、6 次单次精确审批、6 次副作用工具调用（4 次 `fs.apply_patch`、2 次 `fs.delete`）；宿主逐步按字节核对内容，最终测试文件不存在，审计链有效。该现场测试促成了非 SSH host 权威派生、Provider 结构错误有界重试、重复副作用抑制和可复现 live harness；仍需核对账单并覆盖 Shell、长任务及更多故障恢复路径。不要复用 Claude Code 的 `ANTHROPIC_*` 或 `[1m]` 模型别名。实现与官方[首次调用](https://api-docs.deepseek.com/zh-cn/)和[Chat API](https://api-docs.deepseek.com/api/create-chat-completion)对齐。
-- OS sandbox/egress：Docker 临时副本、复制一致性、跨执行器容器清理和产物白名单导出已完成；Windows 已用 WinGet 安装并由固定路径识别 `cosign`、`syft`、`trivy`，Syft 本地镜像 SBOM smoke 已通过。Trivy 数据库首次下载因网络过慢未完成，Cosign 仍缺少可信签名身份/证据；仍需补齐供应链证据、跨进程 Windows Job handle/POSIX 恢复和真实终端信号矩阵。SSH/Browser 仍需各自独立 egress allowlist。
+- OS sandbox/egress：Docker 临时副本、复制一致性、跨执行器容器清理和产物白名单导出已完成；导出不再依赖宿主可写 bind，而使用容器生命周期内的匿名卷，停止后由宿主读取 tar 流并逐项拒绝越界、链接、设备、额外文件和超限内容。Windows 已识别 `cosign`、`syft`、`trivy`，Syft 本地镜像 SBOM smoke 已通过。Trivy 完整数据库扫描和可信 Cosign 签名证据仍缺；SSH/Browser 仍需各自独立 egress allowlist。
 - SSH：加入真实 transport 依赖、known_hosts/指纹人工确认和精确 P3 审批；先只读 test，再做远程写流程。
 - Browser：Playwright + Edge 非持久化 context 与离线 `about:blank` 已验证；下一步必须先实现独立 OS egress allowlist，再进行人工外网 allowlist 验证。真实下载、提交和登录态仍关闭。
 - MCP/Plugin：固定来源/版本/hash，独立隔离进程和网络策略，不能把 manifest 的 read-only 声明当授权。
@@ -103,6 +104,6 @@ uv lock --check
 
 ## 暂不做的事情
 
-本轮最新全量回归为 `402 passed, 10 skipped`；新增镜像安全工具探测测试已包含在该数字中。
+2026-08-25 当前快照：开启开发者模式后的 Windows 11 全量为 `418 passed, 6 skipped`；WSL2 Ubuntu 全量为 `407 passed, 17 skipped`，后者包含 6 项真实 Docker 沙箱测试。两边的 skip 均是平台或显式 live 条件，不计为能力通过。`ruff check .`、`mypy src tests`、`uv lock --check`、wheel/sdist 构建和隔离环境 packaged CLI smoke 同时通过。
 
 不自动 commit、push、发布、部署、连接生产主机或索取私钥/API key；不通过关闭安全策略来“解锁”未完成能力。任何 required-path 能力若没有可强制执行的宿主边界，就保持 `BLOCKED`。

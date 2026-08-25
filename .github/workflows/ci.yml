@@ -39,6 +39,16 @@ jobs:
           tests/integration/test_shell_cross_platform.py::test_posix_bash_no_profile_utf8_and_lf_smoke
           tests/unit/test_process.py
           tests/unit/test_process_capture.py
+      - name: Pull pinned Linux sandbox image
+        if: runner.os == 'Linux'
+        run: >-
+          docker pull
+          mirror.gcr.io/library/python@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a
+      - name: Required Linux Docker sandbox regression
+        if: runner.os == 'Linux'
+        env:
+          ASTERCODE_REQUIRE_LIVE_DOCKER: "1"
+        run: uv run pytest -q -rs tests/integration/test_docker_process_live.py
       - name: Windows Job Object and PowerShell 7 regression
         if: runner.os == 'Windows'
         run: >-

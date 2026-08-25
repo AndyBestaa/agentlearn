@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -12,6 +16,8 @@ from astercode.provider import DeterministicFakeProvider
 from astercode.runtime import Orchestrator, build_registry
 from astercode.storage import Storage
 from astercode.tools.process import ProcessTools
+
+CREATE_NEW_PROCESS_GROUP = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
 
 
 @pytest.mark.asyncio
@@ -97,3 +103,36 @@ async def test_cancel_during_approved_resume_stops_the_process_tree(
         if not resumed.done():
             resumed.cancel()
         await orchestrator.close()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows console signal regression")
+def test_real_chat_process_handles_console_break_without_traceback(tmp_path: Path) -> None:
+    (tmp_path / ".astercode").mkdir()
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "astercode", "chat", "--root", str(tmp_path), "--fake"],
+        cwd=str(tmp_path),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=CREATE_NEW_PROCESS_GROUP,
+        env={**os.environ, "NO_COLOR": "1", "PYTHONIOENCODING": "utf-8"},
+    )
+    try:
+        # The child is attached to this console but has its own process group.
+        # Wait for Typer/Rich imports and prompt setup before targeting only
+        # that group with CTRL_BREAK_EVENT.
+        time.sleep(2)
+        assert proc.poll() is None, "chat process exited before console signal"
+        os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
+        output, _ = proc.communicate(timeout=15)
+
+        assert proc.returncode == 0, output
+        assert "已退出" in output or "本轮已取消" in output
+        assert "Traceback" not in output
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=5)

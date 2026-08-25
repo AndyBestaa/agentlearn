@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from pathlib import Path
 
@@ -34,6 +35,8 @@ def _live_attestation() -> DockerSandboxAttestation:
             workspace_bytes=67_108_864,
         )
     except DockerSandboxUnavailable as exc:
+        if os.environ.get("ASTERCODE_REQUIRE_LIVE_DOCKER") == "1":
+            raise AssertionError(f"required live Docker sandbox unavailable: {exc}") from exc
         pytest.skip(f"live Docker sandbox unavailable: {exc}")
 
 

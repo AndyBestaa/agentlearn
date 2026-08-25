@@ -89,8 +89,8 @@ class FilesystemTools:
             if not base.is_absolute():
                 base = self.roots[0] / base
             effective_candidate = base / effective_candidate
-        if for_write and effective_candidate.is_symlink():
-            raise PermissionError("writing through a symlink is not allowed")
+        if for_write:
+            _reject_link_or_reparse_traversal(effective_candidate, checked.root)
         protected = protected_path_reason(checked.resolved, self.roots)
         if protected:
             raise PermissionError(protected)
@@ -296,7 +296,7 @@ class FilesystemTools:
     def move(self, source: str, destination: str) -> ToolResult:
         result = self._result("fs.move", {"source": source, "destination": destination})
         try:
-            src_checked = self.resolve_authorized(source, must_exist=True)
+            src_checked = self.resolve_authorized(source, must_exist=True, for_write=True)
             dst_checked = self.resolve_authorized(destination, for_write=True)
             src = self._revalidate(src_checked, must_exist=True)
             dst = self._revalidate(dst_checked, must_exist=False)
@@ -342,6 +342,43 @@ def _json(value: Any) -> str:
     import json
 
     return json.dumps(value, ensure_ascii=False, indent=2, default=str)
+
+
+def _reject_link_or_reparse_traversal(candidate: Path, root: Path) -> None:
+    """Reject write targets whose lexical path crosses a redirecting entry.
+
+    Resolving a junction that points back inside an authorized root is safe for
+    reads, but it is ambiguous for writes: deleting ``link`` could otherwise
+    delete the linked directory rather than the junction entry.  Walk the
+    original lexical path and fail closed on symlinks, junctions, or any other
+    Windows reparse point.  Missing suffixes are safe to stop at because they
+    cannot yet redirect traversal.
+    """
+
+    lexical = Path(os.path.abspath(candidate))
+    try:
+        relative = lexical.relative_to(root)
+    except ValueError as exc:
+        raise PermissionError("write path is not lexically inside the authorized root") from exc
+
+    current = root
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    for part in relative.parts:
+        current = current / part
+        is_link = current.is_symlink()
+        is_junction = bool(getattr(current, "is_junction", lambda: False)())
+        is_reparse = False
+        try:
+            metadata = current.stat(follow_symlinks=False)
+            attributes = int(getattr(metadata, "st_file_attributes", 0))
+            is_reparse = bool(attributes & reparse_flag)
+        except FileNotFoundError:
+            if not is_link:
+                break
+        if is_link or is_junction or is_reparse:
+            raise PermissionError(
+                f"write path cannot traverse a link, junction, or reparse point: {current}"
+            )
 
 
 def _trusted_rg() -> str | None:

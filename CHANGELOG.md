@@ -6,6 +6,10 @@
 
 ### Added
 
+- Windows 路径安全补齐真实 junction/reparse 回归：根外 junction 的读取拒绝；根内 junction 可只读但写入、创建、移动和删除均拒绝；junction 形式的工作区根也由严格启动校验拒绝。写路径现在逐段检查 symlink/junction/reparse traversal，`fs.move` 的源路径同样复核。
+- Windows 公开入口统一安装 `SIGBREAK`/Ctrl-Break 处理并把 Typer `Abort` 转为干净取消；真实子进程控制台注入回归无 traceback。新增宿主帮助进程 `os._exit` 后 Job `KILL_ON_JOB_CLOSE` 清理测试，以及 POSIX zombie 不再误报存活的回归。
+- WSL2 Ubuntu 独立 Python 3.12 venv 全量矩阵通过，包含 6 项真实 Docker/bash 沙箱测试。受控构建导出改为 Docker 管理的匿名卷：容器停止后宿主从 tar 流自行校验路径、类型、精确集合和大小，避免 Docker 直接写宿主目录；模型命令执行前显式核验所有 capability 集合为零。
+- GitHub Actions 的 Ubuntu job 现在拉取固定 RepoDigest 后，以 `ASTERCODE_REQUIRE_LIVE_DOCKER=1` 强制执行 6 项 Docker 沙箱回归；attestation 不可用时测试失败而不是跳过。本机 Windows 与 WSL2 对同一强制模式均为 `6 passed`；工作流语法已本地解析，远端 Runner 结果须在推送后确认。
 - Windows 已通过 WinGet 安装 `cosign` 3.1.3、`syft` 1.51.0、`trivy` 0.74.0；AsterCode 仅从固定 WinGet/程序目录识别它们，不信任 PATH。Syft 本地 `python:3.12-slim` SBOM smoke 已通过；Trivy 首次漏洞数据库下载因网络过慢中止，Cosign 尚未取得可信签名身份证据。
 - 新增 `process.exec_export` 受控构建导出：模型必须列出最多 16 个相对普通文件并接受精确审批；受信容器包装器用 SETUID/SETGID 将构建命令降权，构建用户不能直接写宿主导出目录。仅在命令成功后按总字节上限复制，宿主复核无链接/无额外文件、计算 SHA-256 并原子发布到 `.astercode/artifacts/build_*`。真实 Docker 及 Fake 模型→审批→导出完整链路通过。
 - CLI `run`/`chat` 在 Ctrl-C 时输出明确取消信息；runtime 的 approval-resume 路径现在与初始 run 一样捕获取消并触发 host kill。集成测试在审批后启动真实长进程，再取消 resume，确认完整进程树退出且 registry 无活动记录。
@@ -70,7 +74,7 @@
 - Git executor 拒绝仓库级 `include/includeIf` 配置，强制禁用 hooks、外部 diff、commit/tag GPG signing、credential helper 和 askpass；恶意仓库 signing 配置回归通过。
 - Git P0 查询进一步拒绝 filter/diff/merge 外部驱动、fsmonitor 和外部 attributes/excludes 配置，设置 `GIT_NO_LAZY_FETCH=1` 并对 diff/show 禁用 external diff/textconv；通用 process/shell 也拒绝绕过受控 Git、SSH、network 和 delete 路径。
 - 修复首次公开 CI 暴露的跨平台差异：Linux mypy 通过运行时检查访问 Windows-only API 并保持 fail-closed；Windows 8.3 临时目录别名改用文件身份比较；GitHub Actions 升级到 Node 24 action 版本。
-- 最终全量回归：`402 passed, 10 skipped`；历史本机 Edge 离线 smoke 另为 `1 passed, 5 deselected`；skip 不视为能力通过。
+- 2026-08-25 开启开发者模式后的最终全量回归：Windows 11 `418 passed, 6 skipped`，WSL2 Ubuntu `407 passed, 17 skipped`；`ruff check .`、`mypy src tests`、`uv lock --check`、wheel/sdist 构建和隔离环境 packaged CLI smoke 通过。历史本机 Edge 离线 smoke 另为 `1 passed, 5 deselected`；skip 不视为能力通过。
 
 ### Not verified / still blocked
 
@@ -80,8 +84,8 @@
 - Playwright + Edge 无网络引擎启动已验证；真实网络 egress/SSRF 防护、外网导航、下载和提交仍为 `LIVE INTEGRATION NOT VERIFIED`。
 - 原生桌面 GUI：默认关闭，未实现 live adapter。
 - MCP/plugin 真实隔离进程、来源下载和网络策略：Fake runner 不是生产隔离边界。
-- Windows Job Object 继续约束宿主 Docker CLI 进程树；Docker Desktop Linux 容器已提供只读宿主源码、临时可写构建区、复制一致性校验、跨执行器身份清理和 `network=none`。产物导出、镜像签名/扫描、跨进程 Job/POSIX 恢复、SSH/Browser egress 和 Linux 原生矩阵仍未验证。
-- Linux 原生 bash/Docker、Windows junction/reparse point、真实终端信号注入和跨进程 Job/POSIX 完整矩阵；PowerShell 7 已安装并通过 doctor，但 Docker shell 当前只支持 bash。
+- Windows Job Object 继续约束宿主 Docker CLI 进程树；Docker Desktop Linux 容器已提供只读宿主源码、临时可写构建区、复制一致性校验、跨执行器身份清理、受控产物导出和 `network=none`。镜像可信签名/完整漏洞扫描、跨重启 Job/POSIX 进程组恢复及 SSH/Browser egress 仍未验证。
+- WSL2 Ubuntu bash/Docker 全量矩阵、Windows 普通 symlink/junction/reparse point、真实 Ctrl-Break 和宿主异常退出 Job close 已验证；裸机 Linux/独立 daemon、PowerShell 7 Docker shell 与远程进程树仍未验证。
 - 本次 DeepSeek smoke 历史上曾暴露流式分片审计写放大、重复上下文导致的高 Token 使用，以及运行后 JSONL/SQLite 少一条记录；上述问题已通过 delta batching、context compaction、状态同步和审计镜像修复完成并回归。该历史 smoke 的 Token 与耗时仍不是 SLA 或成本承诺。
 
 ### Safety notes

@@ -11,11 +11,13 @@ container.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import re
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import threading
 import uuid
@@ -47,8 +49,10 @@ _COPY_EXCLUDES = (
     "node_modules",
     "venv",
 )
-_COPY_AND_EXEC = """import hashlib, os, shutil, stat, sys
+_COPY_AND_EXEC = """import ctypes, hashlib, os, shutil, stat, sys
 excluded = set(sys.argv[1].split(','))
+uid, gid = (int(item) for item in sys.argv[3].split(':'))
+command = sys.argv[4:]
 def ignore(_directory, names):
     return [name for name in names if name in excluded or name.endswith('.pyc')]
 def manifest(root):
@@ -84,16 +88,55 @@ def manifest(root):
     walk(root, '')
     return records
 source_before = manifest('/workspace-source')
-shutil.copytree('/workspace-source', '/workspace', dirs_exist_ok=True, symlinks=True, ignore=ignore)
+def copy_workspace(source, target):
+    os.makedirs(target, exist_ok=True)
+    for entry in os.scandir(source):
+        if entry.name in excluded or entry.name.endswith('.pyc'): continue
+        destination = os.path.join(target, entry.name)
+        mode = os.lstat(entry.path).st_mode
+        if stat.S_ISLNK(mode): os.symlink(os.readlink(entry.path), destination)
+        elif stat.S_ISDIR(mode):
+            os.mkdir(destination, stat.S_IMODE(mode)); copy_workspace(entry.path, destination)
+        elif stat.S_ISREG(mode):
+            shutil.copyfile(entry.path, destination); os.chmod(destination, stat.S_IMODE(mode))
+        else: raise RuntimeError('unsupported workspace entry: ' + entry.name)
+copy_workspace('/workspace-source', '/workspace')
 source_after = manifest('/workspace-source')
 copied = manifest('/workspace')
 if source_before != source_after or source_after != copied:
     print('AsterCode refused to execute because the workspace changed while the sandbox snapshot was copied.', file=sys.stderr)
     raise SystemExit(86)
+if hasattr(os, 'chown'):
+    os.chmod('/workspace', 0o700)
+    for directory, directories, files in os.walk('/workspace'):
+        os.chown(directory, uid, gid, follow_symlinks=False)
+        for name in directories + files:
+            os.chown(os.path.join(directory, name), uid, gid, follow_symlinks=False)
+    os.chown('/workspace', uid, gid, follow_symlinks=False)
 os.chdir(sys.argv[2])
-os.execvp(sys.argv[3], sys.argv[3:])
+def demote():
+    if os.geteuid() == 0: os.setgroups([])
+    if os.getgid() != gid: os.setgid(gid)
+    if os.getuid() != uid: os.setuid(uid)
+    class Header(ctypes.Structure): _fields_ = [('version', ctypes.c_uint32), ('pid', ctypes.c_int)]
+    class Data(ctypes.Structure): _fields_ = [('effective', ctypes.c_uint32), ('permitted', ctypes.c_uint32), ('inheritable', ctypes.c_uint32)]
+    libc = ctypes.CDLL(None, use_errno=True)
+    header = Header(0x20080522, 0)
+    data = (Data * 2)()
+    if libc.capset(ctypes.byref(header), ctypes.byref(data)) != 0:
+        raise OSError(ctypes.get_errno(), 'capset failed while dropping wrapper capabilities')
+    # PR_CAP_AMBIENT / PR_CAP_AMBIENT_CLEAR_ALL. Older kernels may report
+    # EINVAL only when ambient capabilities are unsupported.
+    if libc.prctl(47, 4, 0, 0, 0) != 0 and ctypes.get_errno() != 22:
+        raise OSError(ctypes.get_errno(), 'failed to clear ambient capabilities')
+    with open('/proc/self/status', encoding='ascii') as stream:
+        caps = {line.split(':', 1)[0]: int(line.split(':', 1)[1].strip(), 16) for line in stream if line.startswith(('CapEff:', 'CapPrm:', 'CapInh:', 'CapAmb:'))}
+    if any(caps.get(name, -1) != 0 for name in ('CapEff', 'CapPrm', 'CapInh', 'CapAmb')):
+        raise RuntimeError('wrapper capabilities remained after demotion')
+if hasattr(os, 'setuid'): demote()
+os.execvp(command[0], command)
 """
-_COPY_EXEC_AND_EXPORT = """import hashlib, json, os, shutil, stat, subprocess, sys
+_COPY_EXEC_AND_EXPORT = """import ctypes, hashlib, json, os, shutil, stat, subprocess, sys
 excluded = set(sys.argv[1].split(','))
 workdir = sys.argv[2]
 exports = json.loads(sys.argv[3])
@@ -133,17 +176,41 @@ def copy_workspace(source, target):
         destination = os.path.join(target, entry.name)
         mode = os.lstat(entry.path).st_mode
         if stat.S_ISLNK(mode): os.symlink(os.readlink(entry.path), destination)
-        elif stat.S_ISDIR(mode): copy_workspace(entry.path, destination)
-        elif stat.S_ISREG(mode): shutil.copyfile(entry.path, destination)
+        elif stat.S_ISDIR(mode):
+            os.mkdir(destination, stat.S_IMODE(mode)); copy_workspace(entry.path, destination)
+        elif stat.S_ISREG(mode):
+            shutil.copyfile(entry.path, destination); os.chmod(destination, stat.S_IMODE(mode))
         else: raise RuntimeError('unsupported workspace entry: ' + entry.name)
 copy_workspace('/workspace-source', '/workspace')
 after = manifest('/workspace-source')
 if before != after or after != manifest('/workspace'):
     print('AsterCode refused to execute because the workspace changed while the sandbox snapshot was copied.', file=sys.stderr)
     raise SystemExit(86)
+if hasattr(os, 'chown'):
+    os.chmod('/workspace', 0o700)
+    for directory, directories, files in os.walk('/workspace'):
+        os.chown(directory, uid, gid, follow_symlinks=False)
+        for name in directories + files:
+            os.chown(os.path.join(directory, name), uid, gid, follow_symlinks=False)
+    os.chown('/workspace', uid, gid, follow_symlinks=False)
 os.chmod('/exports', 0o700)
 def demote():
-    os.setgroups([]); os.setgid(gid); os.setuid(uid)
+    if os.geteuid() == 0: os.setgroups([])
+    if os.getgid() != gid: os.setgid(gid)
+    if os.getuid() != uid: os.setuid(uid)
+    class Header(ctypes.Structure): _fields_ = [('version', ctypes.c_uint32), ('pid', ctypes.c_int)]
+    class Data(ctypes.Structure): _fields_ = [('effective', ctypes.c_uint32), ('permitted', ctypes.c_uint32), ('inheritable', ctypes.c_uint32)]
+    libc = ctypes.CDLL(None, use_errno=True)
+    header = Header(0x20080522, 0)
+    data = (Data * 2)()
+    if libc.capset(ctypes.byref(header), ctypes.byref(data)) != 0:
+        raise OSError(ctypes.get_errno(), 'capset failed while dropping wrapper capabilities')
+    if libc.prctl(47, 4, 0, 0, 0) != 0 and ctypes.get_errno() != 22:
+        raise OSError(ctypes.get_errno(), 'failed to clear ambient capabilities')
+    with open('/proc/self/status', encoding='ascii') as stream:
+        caps = {line.split(':', 1)[0]: int(line.split(':', 1)[1].strip(), 16) for line in stream if line.startswith(('CapEff:', 'CapPrm:', 'CapInh:', 'CapAmb:'))}
+    if any(caps.get(name, -1) != 0 for name in ('CapEff', 'CapPrm', 'CapInh', 'CapAmb')):
+        raise RuntimeError('wrapper capabilities remained after demotion')
 completed = subprocess.run(command, cwd=workdir, stdin=subprocess.DEVNULL, preexec_fn=demote, check=False)
 if completed.returncode != 0: raise SystemExit(completed.returncode)
 total = 0
@@ -276,6 +343,102 @@ def _run_control(
         ) from exc
 
 
+def _copy_artifact_archive(
+    executable: Path,
+    container_name: str,
+    staging: Path,
+    expected_paths: list[str],
+    *,
+    max_bytes: int,
+    timeout: float,
+) -> None:
+    """Copy a stopped container's export volume through a validated tar stream."""
+
+    try:
+        completed = subprocess.run(
+            [
+                str(executable),
+                "container",
+                "cp",
+                f"{container_name}:/exports/.",
+                "-",
+            ],
+            capture_output=True,
+            check=False,
+            timeout=timeout,
+            env=_docker_host_env(executable),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise DockerSandboxUnavailable(
+            f"Docker artifact copy failed ({type(exc).__name__})"
+        ) from exc
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()[-500:]
+        raise PermissionError(
+            f"artifact copy from stopped container failed: {detail or 'no diagnostic'}"
+        )
+    if len(completed.stdout) > max_bytes + 1_048_576:
+        raise PermissionError("artifact archive exceeds the configured byte limit")
+
+    expected = set(expected_paths)
+    expected_directories = {
+        "/".join(parts[:index])
+        for path in expected_paths
+        for parts in [path.split("/")]
+        for index in range(1, len(parts))
+    }
+    observed: set[str] = set()
+    total = 0
+    with tarfile.open(fileobj=io.BytesIO(completed.stdout), mode="r:*") as archive:
+        for member in archive:
+            name = member.name.replace("\\", "/")
+            while name.startswith("./"):
+                name = name[2:]
+            name = name.rstrip("/")
+            if not name or name == ".":
+                continue
+            parts = name.split("/")
+            host_path = Path(name)
+            if (
+                name.startswith("/")
+                or host_path.is_absolute()
+                or bool(host_path.drive)
+                or any(
+                    part in {"", ".", ".."}
+                    or ":" in part
+                    or any(ord(char) < 32 for char in part)
+                    for part in parts
+                )
+            ):
+                raise PermissionError("artifact archive contains an unsafe path")
+            if member.isdir():
+                if name not in expected_directories:
+                    raise PermissionError("artifact archive contains an unexpected directory")
+                staging.joinpath(*parts).mkdir(parents=True, exist_ok=True)
+                continue
+            if not member.isfile() or name not in expected or name in observed:
+                raise PermissionError("artifact archive contains a non-regular or unexpected entry")
+            total += member.size
+            if total > max_bytes:
+                raise PermissionError("artifact export exceeds the configured byte limit")
+            source = archive.extractfile(member)
+            if source is None:
+                raise PermissionError("artifact archive contains an unreadable file")
+            target = staging.joinpath(*parts)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("xb") as writer:
+                shutil.copyfileobj(source, writer, length=1_048_576)
+                writer.flush()
+                os.fsync(writer.fileno())
+            target.chmod(0o600)
+            observed.add(name)
+    if observed != expected:
+        raise PermissionError(
+            "artifact export did not match the exact requested file set: "
+            f"expected={sorted(expected)!r}, observed={sorted(observed)!r}"
+        )
+
+
 def _resolve_local_image(
     executable: Path, configured_image: str
 ) -> tuple[str, str]:
@@ -330,7 +493,7 @@ def _fixed_container_options(
     tmpfs_bytes: int,
     workspace_bytes: int,
     auto_remove: bool = True,
-    export_dir: Path | None = None,
+    export_bytes: int | None = None,
     root_wrapper: bool = False,
 ) -> list[str]:
     source = str(root)
@@ -371,7 +534,7 @@ def _fixed_container_options(
         "--tmpfs",
         f"/tmp:rw,nosuid,nodev,noexec,size={tmpfs_bytes},mode=0700,uid={uid},gid={gid}",
         "--tmpfs",
-        f"/workspace:rw,nosuid,nodev,size={workspace_bytes},mode={'0777' if root_wrapper else '0700'},uid={uid},gid={gid}",
+        f"/workspace:rw,nosuid,nodev,size={workspace_bytes},mode=0700,uid={'0' if root_wrapper else uid},gid={'0' if root_wrapper else gid}",
         "--mount",
         f"type=bind,source={source},target=/workspace-source,readonly",
         "--workdir",
@@ -388,16 +551,30 @@ def _fixed_container_options(
     if not root_wrapper:
         options.extend(["--user", user])
     else:
-        # The trusted wrapper needs only these two capabilities to launch the
-        # model-selected command as the configured unprivileged uid/gid.  The
-        # child loses them when setuid/setgid completes.
-        options.extend(["--cap-add", "SETUID", "--cap-add", "SETGID"])
-    if export_dir is not None:
-        export_source = str(export_dir)
-        if "," in export_source or any(ord(char) < 32 for char in export_source):
-            raise DockerSandboxUnavailable("artifact staging path cannot be represented as a Docker bind mount")
+        # The fixed wrapper can read a mode-0700 host snapshot, transfer
+        # ownership of the private tmpfs copy, and then demote. The host bind
+        # remains read-only and the selected command loses these capabilities
+        # before exec.
+        for capability in (
+            "DAC_READ_SEARCH",
+            "CHOWN",
+            "SETUID",
+            "SETGID",
+        ):
+            options.extend(["--cap-add", capability])
+    if export_bytes is not None:
+        if export_bytes <= 0:
+            raise DockerSandboxUnavailable("artifact export limit must be positive")
+        # A tmpfs disappears when the container stops, before the host can copy
+        # and validate artifacts. A Docker-managed anonymous volume is not a
+        # host bind, survives until the stopped container is removed, and is
+        # deleted with that container. The trusted wrapper enforces the byte
+        # limit while copying into it.
         options.extend(
-            ["--mount", f"type=bind,source={export_source},target=/exports"]
+            [
+                "--mount",
+                "type=volume,destination=/exports,volume-nocopy",
+            ]
         )
     if max_memory_bytes is not None:
         options.extend(["--memory", str(max_memory_bytes), "--memory-swap", str(max_memory_bytes)])
@@ -413,7 +590,7 @@ def _fixed_container_options(
     return options
 
 
-def _copy_and_exec_command(workdir: str, argv: list[str]) -> list[str]:
+def _copy_and_exec_command(workdir: str, argv: list[str], user: str) -> list[str]:
     """Copy sources and exec argv without evaluating model-provided text."""
 
     return [
@@ -422,6 +599,7 @@ def _copy_and_exec_command(workdir: str, argv: list[str]) -> list[str]:
         _COPY_AND_EXEC,
         ",".join(_COPY_EXCLUDES),
         workdir,
+        user,
         *argv,
     ]
 
@@ -481,13 +659,14 @@ def attest_docker_sandbox(
             cpus=cpus,
             tmpfs_bytes=tmpfs_bytes,
             workspace_bytes=workspace_bytes,
+            root_wrapper=True,
         )
         completed = _run_control(
             executable,
             [
                 *arguments,
                 *_copy_and_exec_command(
-                    "/workspace", ["python", "-c", probe]
+                    "/workspace", ["python", "-c", probe], user
                 ),
             ],
             timeout=30,
@@ -641,8 +820,9 @@ class DockerProcessTools(ProcessTools):
                 cpus=self.container_cpus,
                 tmpfs_bytes=self.container_tmpfs_bytes,
                 workspace_bytes=self.container_workspace_bytes,
+                root_wrapper=True,
             ),
-            *_copy_and_exec_command(container_cwd, command),
+            *_copy_and_exec_command(container_cwd, command, self.container_user),
         ]
         with self._state_lock:
             self._container_names[process_handle] = name
@@ -676,9 +856,18 @@ class DockerProcessTools(ProcessTools):
             "agent_state_hidden": True,
             "network_sandbox": True,
             "network_mode": "none",
-            "capabilities_dropped": "ALL",
+            "capabilities_dropped": (
+                "ALL except DAC_READ_SEARCH/CHOWN/SETUID/SETGID held only by trusted copy wrapper"
+            ),
             "no_new_privileges": True,
             "container_user": self.container_user,
+            "trusted_copy_wrapper": True,
+            "wrapper_capabilities": [
+                "DAC_READ_SEARCH",
+                "CHOWN",
+                "SETUID",
+                "SETGID",
+            ],
             "pids_limit": self.max_processes,
             "memory_limit": self.max_memory_bytes,
             "cpus": self.container_cpus,
@@ -693,7 +882,12 @@ class DockerProcessTools(ProcessTools):
             if "\\" in value:
                 raise ValueError("artifact paths must use forward slashes")
             parts = value.split("/")
-            if value.startswith("/") or any(part in {"", ".", ".."} for part in parts):
+            if value.startswith("/") or any(
+                part in {"", ".", ".."}
+                or ":" in part
+                or any(ord(char) < 32 for char in part)
+                for part in parts
+            ):
                 raise ValueError("artifact paths must stay below the sandbox cwd")
             normalized.append("/".join(parts))
         if len(normalized) != len(set(normalized)):
@@ -706,7 +900,6 @@ class DockerProcessTools(ProcessTools):
         argv: list[str],
         workdir: Path,
         artifact_paths: list[str],
-        staging: Path,
     ) -> subprocess.Popen[str]:
         root, container_cwd = self._root_and_container_cwd(workdir)
         name = f"astercode-{process_handle.removeprefix('proc_')}".lower()
@@ -723,7 +916,8 @@ class DockerProcessTools(ProcessTools):
                 cpus=self.container_cpus,
                 tmpfs_bytes=self.container_tmpfs_bytes,
                 workspace_bytes=self.container_workspace_bytes,
-                export_dir=staging,
+                auto_remove=False,
+                export_bytes=self.artifact_max_bytes,
                 root_wrapper=True,
             ),
             "python",
@@ -794,9 +988,7 @@ class DockerProcessTools(ProcessTools):
                 tempfile.mkdtemp(prefix=".build-export-", dir=str(artifact_root))
             )
             final = artifact_root / f"build_{uuid.uuid4().hex}"
-            proc = self._spawn_export(
-                process_handle, argv, workdir, paths, staging
-            )
+            proc = self._spawn_export(process_handle, argv, workdir, paths)
             capture = self._begin_capture(process_handle, proc)
             result.side_effects = ["process_start", "artifact_write"]
             result.metadata.update(
@@ -809,9 +1001,14 @@ class DockerProcessTools(ProcessTools):
             )
             result.metadata["trusted_export_wrapper"] = True
             result.metadata["capabilities_dropped"] = (
-                "ALL except SETUID/SETGID held only by trusted export wrapper"
+                "ALL except DAC_READ_SEARCH/CHOWN/SETUID/SETGID held only by trusted export wrapper"
             )
-            result.metadata["wrapper_capabilities"] = ["SETUID", "SETGID"]
+            result.metadata["wrapper_capabilities"] = [
+                "DAC_READ_SEARCH",
+                "CHOWN",
+                "SETUID",
+                "SETGID",
+            ]
             result.metadata["build_command_user"] = self.container_user
             try:
                 result.exit_code = proc.wait(timeout=timeout)
@@ -826,6 +1023,18 @@ class DockerProcessTools(ProcessTools):
                     result.status = "unknown"
                     result.error = "build output pipes did not close before artifact export"
                 if result.status == "completed":
+                    with self._state_lock:
+                        container_name = self._container_names.get(process_handle)
+                    if not container_name:
+                        raise PermissionError("artifact container identity is unavailable")
+                    _copy_artifact_archive(
+                        self.attestation.executable,
+                        container_name,
+                        staging,
+                        paths,
+                        max_bytes=self.artifact_max_bytes,
+                        timeout=min(30.0, max(5.0, timeout)),
+                    )
                     exported: list[dict[str, object]] = []
                     total = 0
                     observed: set[str] = set()
@@ -843,7 +1052,10 @@ class DockerProcessTools(ProcessTools):
                                 raise PermissionError("artifact export contains a non-regular file")
                             observed.add(candidate.relative_to(staging).as_posix())
                     if observed != set(paths):
-                        raise PermissionError("artifact export did not match the exact requested file set")
+                        raise PermissionError(
+                            "artifact export did not match the exact requested file set: "
+                            f"expected={sorted(paths)!r}, observed={sorted(observed)!r}"
+                        )
                     for relative in paths:
                         target = staging / Path(relative)
                         size = target.stat().st_size

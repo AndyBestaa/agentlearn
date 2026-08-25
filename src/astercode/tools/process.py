@@ -763,6 +763,11 @@ class ProcessTools:
         fields = raw[closing + 2 :].split() if closing >= 0 else []
         if len(fields) <= 19:
             return None
+        if fields[0] == "Z":
+            # An exited child remains in /proc until its parent reaps it, but
+            # it cannot execute or receive signals and must not be reported as
+            # a live orphan during cross-process recovery.
+            return "missing"
         return f"linux-proc-start:{fields[19]}"
 
     @staticmethod

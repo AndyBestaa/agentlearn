@@ -2,7 +2,7 @@
 
 AsterCode 是一个基于 LangGraph 的本地优先编程代理原型。模型只能提出结构化工具调用；路径校验、权限分级、审批、执行、审计和恢复由宿主程序完成。它不是 Claude Code 的私有实现或品牌复制品。
 
-当前版本的重点仍是**不设置 API key 也能运行的离线垂直链路**：Fake Provider、文件/Git 工具、审批与恢复、SQLite WAL/FTS5、Fake SSH、Fake Browser、Fake MCP/Plugin、只读子代理、流式事件和 replay 都可以用自动化测试验证。Windows 11 + Docker Desktop 现已具备经过主动探测的 Linux 容器执行边界：固定镜像摘要、`--network none`、只读根与宿主源码挂载、512 MiB 临时可写工作副本、隐藏状态/VCS/本机依赖目录、非 root、capabilities 全移除、no-new-privileges，以及 CPU/memory/PID/tmpfs 限额；宿主 Docker CLI 继续受 Job Object 进程树约束。当前切片可运行 Python/bash 验证和需要写缓存/构建产物的命令，但不能联网安装依赖，构建产物也不会自动回写宿主。真实 OpenAI、SSH、浏览器外网、GUI 和插件进程隔离仍未验证。
+当前版本的重点仍是**不设置 API key 也能运行的离线垂直链路**：Fake Provider、文件/Git 工具、审批与恢复、SQLite WAL/FTS5、Fake SSH、Fake Browser、Fake MCP/Plugin、只读子代理、流式事件和 replay 都可以用自动化测试验证。Windows 11 + Docker Desktop 现已具备经过主动探测的 Linux 容器执行边界：固定镜像摘要、`--network none`、只读根与宿主源码挂载、512 MiB 临时可写工作副本、隐藏状态/VCS/本机依赖目录、非 root、模型命令 capabilities 全为零、no-new-privileges，以及 CPU/memory/PID/tmpfs 限额；宿主 Docker CLI 继续受 Job Object 进程树约束。当前切片可运行 Python/bash 验证和需要写缓存/构建产物的命令，但不能联网安装依赖；普通构建产物不会回写宿主，精确审批的 `process.exec_export` 可通过受校验的容器 tar 流保留白名单普通文件。真实 OpenAI、SSH、浏览器外网、GUI 和插件进程隔离仍未验证。
 
 ## 安装与首次启动
 
@@ -206,7 +206,7 @@ uv run astercode kill --root .
 uv run astercode kill --root . --clear
 ```
 
-kill switch 会持久化并阻止新工具调用，尽力终止已登记的本地进程树；操作系统无法确认的进程会报告 `unknown`。Windows 上，目标进程以 `CREATE_SUSPENDED` 创建，先加入 Job Object 再恢复执行；Job 使用 `KILL_ON_JOB_CLOSE`、树级 active-process、job-memory 和累计 user-mode CPU-time limit。本机已通过父子进程树的 Job close/`process.stop`、进程数/内存/CPU 限额，以及“Job 分配失败时目标 marker 不得出现”的测试。每次启动返回独立 `proc_...` 句柄，stdout/stderr 会持续排空并仅保留有界前缀，避免重复命令句柄碰撞和输出撑满管道。这个机制只负责进程树生命周期和资源约束，不是文件系统或网络沙箱；远程句柄和 POSIX 等价现场矩阵仍未完整验证。
+kill switch 会持久化并阻止新工具调用，尽力终止已登记的本地进程树；操作系统无法确认的进程会报告 `unknown`。Windows 上，目标进程以 `CREATE_SUSPENDED` 创建，先加入 Job Object 再恢复执行；Job 使用 `KILL_ON_JOB_CLOSE`、树级 active-process、job-memory 和累计 user-mode CPU-time limit。本机已通过父子进程树的 Job close/`process.stop`、进程数/内存/CPU 限额、“Job 分配失败时目标 marker 不得出现”、宿主帮助进程异常退出后无孤儿，以及真实 Ctrl-Break 的测试。每次启动返回独立 `proc_...` 句柄，stdout/stderr 会持续排空并仅保留有界前缀，避免重复命令句柄碰撞和输出撑满管道。这个机制只负责进程树生命周期和资源约束，不是文件系统或网络沙箱；跨重启 Job handle、远程句柄和 POSIX 进程组等价矩阵仍未完整验证。
 
 ## 三层记忆
 
@@ -230,7 +230,7 @@ uv run astercode memory forget MEMORY_ID --root .
 ## 网络、SSH、浏览器与 GUI
 
 - 网络默认 `deny_by_default`。本机 Docker process/shell 使用 `--network none` 并通过主动连接失败探测；它只证明这些容器没有网络，不是浏览器、SSH 或宿主进程的通用 egress allowlist。未通过 Docker attestation 时 process/shell 即使获批也不会启动。
-- 普通 Docker 构建产生的文件默认随临时副本删除。需要保留产物时，模型必须调用独立的 `process.exec_export` 并列出精确相对文件；审批后构建仍以非 root 运行且不能直接写导出目录。只有成功命令的白名单普通文件会在大小与 SHA-256 复核后进入 `.astercode/artifacts/build_*`；目录、链接、额外文件和超出总预算的导出都会拒绝。
+- 普通 Docker 构建产生的文件默认随临时副本删除。需要保留产物时，模型必须调用独立的 `process.exec_export` 并列出精确相对文件；审批后构建仍以非 root、零 capabilities 运行且不能直接写 root-only 导出区。只有成功命令的白名单普通文件会先进入 Docker 匿名卷，再由宿主从 tar 流逐项校验并在大小与 SHA-256 复核后发布到 `.astercode/artifacts/build_*`；越界路径、目录、链接、设备、重复/额外文件和超出总预算的导出都会拒绝。
 - P0 Git 查询使用固定 Git 可执行文件和干净环境，设置 `GIT_NO_LAZY_FETCH=1`，避免 partial/promisor clone 在 status/diff/log/show/branch 中隐式联网；仓库配置若请求 filter/diff/merge 外部驱动、hooks、fsmonitor、外部 attributes/excludes 文件或 include 会在启动 Git 前拒绝，diff/show 同时禁用 external diff/textconv。这不把 Git push 变成 P0；push 仍是 P3 且网络边界未验证时 blocked。
 - 当前 Windows 主机已验证 WSL2、Docker Desktop Linux engine、PowerShell 7 和固定 Python 镜像。AppContainer/Windows Sandbox/Hyper-V 仍不是已验证路径；SSH、浏览器和其他真实网络能力继续保持 `BLOCKED`。
 - `astercode doctor` 还会检查固定安装路径下的 `cosign`、`syft`、`trivy`。当前 Windows 已通过 WinGet 安装并被 doctor 识别为 `AVAILABLE`；这只证明工具存在，不等于镜像签名、SBOM 或漏洞扫描证据已经完成。固定 digest 只能防标签漂移，不能替代这些供应链证据。
@@ -276,7 +276,9 @@ uv run python scripts/live_chat_cycle_smoke.py --root C:\path\to\empty-test-work
 
 ## 常见问题
 
-最新全量回归为 `402 passed, 10 skipped`；上方历史 smoke 段落中的旧数字仅保留为历史记录。
+2026-08-25 最新全量回归：开启开发者模式后的 Windows 11 为 `418 passed, 6 skipped`；WSL2 Ubuntu 为 `407 passed, 17 skipped`，其中包含 6 项真实 Docker/bash 沙箱测试。`ruff check .`、`mypy src tests`、`uv lock --check`、wheel/sdist 构建和隔离环境 packaged CLI smoke 同时通过。skip 只表示平台或显式 live 条件未满足，不算能力通过；WSL + Docker Desktop 证据也不外推为裸机 Linux 或生产 daemon 验收。
+
+GitHub Actions 的 Ubuntu job 会拉取同一固定摘要镜像，并设置 `ASTERCODE_REQUIRE_LIVE_DOCKER=1` 单独运行 Docker live 测试；因此缺少 Docker、镜像或 attestation 会让 job 失败，不能静默跳过。该工作流已完成本地 YAML 解析和 Windows/WSL 强制模式验证，远端结果需在下一次推送后确认。
 
 - **没有 API key**：使用 `--fake` 或 `--replay`，这是受支持的离线模式。
 - **`provider-key UNSET`**：只影响真实模型调用，不影响离线测试。DeepSeek 使用 `DEEPSEEK_API_KEY`，OpenAI 使用 `OPENAI_API_KEY`，两者不会互相借用。
@@ -286,6 +288,6 @@ uv run python scripts/live_chat_cycle_smoke.py --root C:\path\to\empty-test-work
 - **`SSH host is not explicitly allowlisted`**：默认 SSH 关闭；需要经过安全评审、known_hosts 和指纹配置，且 live transport 仍未验证。
 - **`approval binding mismatch`**：动作参数、路径、cwd、diff、主机或 nonce 发生变化，重新发起审批。
 - **`unknown`**：超时或取消后无法确认副作用；先用只读查询核对，不自动重试非幂等动作。
-- **Windows symlink/junction 测试跳过**：当前账户可能没有创建链接的权限；这不等于边界已在 Windows 上完整验证。
+- **Windows symlink 测试跳过**：开启 Windows 开发者模式后重新运行；当前主机已开启并通过普通文件/目录 symlink 与 junction/reparse 回归。其他机器若未开启，pytest 会明确 skip，不能把 skip 算作通过。
 
 更多设计和剩余工作见 [docs/architecture.md](docs/architecture.md)、[docs/threat-model.md](docs/threat-model.md) 和 [docs/implementation-plan.md](docs/implementation-plan.md)。

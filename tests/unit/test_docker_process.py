@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import io
 import json
+import os
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -15,6 +18,7 @@ from astercode.tools.docker_process import (
     DockerSandboxAttestation,
     DockerSandboxUnavailable,
     _copy_and_exec_command,
+    _copy_artifact_archive,
     _docker_host_env,
     _fixed_container_options,
     _resolve_local_image,
@@ -60,6 +64,124 @@ def test_container_options_enforce_fixed_ephemeral_offline_boundary(tmp_path: Pa
     assert any("/workspace-source/.git:" in item for item in arguments)
     assert not any("docker.sock" in item.lower() for item in arguments)
     assert arguments[-1] == "python@sha256:" + "a" * 64
+
+
+def test_export_container_uses_docker_managed_volume(tmp_path: Path) -> None:
+    arguments = _fixed_container_options(
+        name="astercode-export",
+        image="python@sha256:" + "a" * 64,
+        root=tmp_path,
+        user="65534:65534",
+        max_processes=16,
+        max_memory_bytes=268_435_456,
+        cpus=1.0,
+        tmpfs_bytes=8_388_608,
+        workspace_bytes=67_108_864,
+        auto_remove=False,
+        root_wrapper=True,
+        export_bytes=1_048_576,
+    )
+
+    mounts = [
+        arguments[index + 1]
+        for index, argument in enumerate(arguments)
+        if argument == "--mount"
+    ]
+    assert "type=volume,destination=/exports,volume-nocopy" in mounts
+    assert "--rm" not in arguments
+    assert not any("/exports:" in argument for argument in arguments)
+
+
+def _tar_bytes(entries: list[tuple[str, bytes | None, str]]) -> bytes:
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w") as archive:
+        for name, content, kind in entries:
+            member = tarfile.TarInfo(name)
+            if kind == "directory":
+                member.type = tarfile.DIRTYPE
+                archive.addfile(member)
+            elif kind == "symlink":
+                member.type = tarfile.SYMTYPE
+                member.linkname = "../outside"
+                archive.addfile(member)
+            else:
+                payload = content or b""
+                member.size = len(payload)
+                archive.addfile(member, io.BytesIO(payload))
+    return output.getvalue()
+
+
+def test_copy_artifact_archive_extracts_only_expected_regular_files(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    payload = _tar_bytes(
+        [
+            ("dist", None, "directory"),
+            ("dist/result.txt", b"verified", "file"),
+        ]
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, payload, b""),
+    )
+
+    _copy_artifact_archive(
+        Path("docker"),
+        "astercode-container",
+        tmp_path,
+        ["dist/result.txt"],
+        max_bytes=1024,
+        timeout=5,
+    )
+
+    assert (tmp_path / "dist" / "result.txt").read_bytes() == b"verified"
+
+
+def test_copy_artifact_archive_rejects_symlink(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    payload = _tar_bytes([("dist/result.txt", None, "symlink")])
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, payload, b""),
+    )
+
+    with pytest.raises(PermissionError, match="non-regular or unexpected"):
+        _copy_artifact_archive(
+            Path("docker"),
+            "astercode-container",
+            tmp_path,
+            ["dist/result.txt"],
+            max_bytes=1024,
+            timeout=5,
+        )
+
+    assert not (tmp_path / "dist" / "result.txt").exists()
+
+
+def test_copy_artifact_archive_rejects_windows_drive_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    payload = _tar_bytes([("C:/escape.txt", b"escape", "file")])
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, payload, b""),
+    )
+
+    with pytest.raises(PermissionError, match="unsafe path"):
+        _copy_artifact_archive(
+            Path("docker"),
+            "astercode-container",
+            tmp_path,
+            ["C:/escape.txt"],
+            max_bytes=1024,
+            timeout=5,
+        )
+
+    assert not (tmp_path / "escape.txt").exists()
 
 
 def test_container_options_reject_unrepresentable_mount(tmp_path: Path) -> None:
@@ -128,7 +250,16 @@ def test_export_container_is_retained_until_artifacts_are_copied(
 
 @pytest.mark.parametrize(
     "value",
-    ["../secret", "/absolute", "a\\b", "a//b", "./file", ""],
+    [
+        "../secret",
+        "/absolute",
+        "C:/escape",
+        "a\\b",
+        "a//b",
+        "./file",
+        "bad\x01name",
+        "",
+    ],
 )
 def test_artifact_export_rejects_ambiguous_or_escaping_paths(value: str) -> None:
     with pytest.raises(ValueError, match="artifact paths"):
@@ -137,7 +268,7 @@ def test_artifact_export_rejects_ambiguous_or_escaping_paths(value: str) -> None
 
 def test_copy_wrapper_does_not_evaluate_model_arguments() -> None:
     malicious = "value;$(touch /tmp/owned)"
-    command = _copy_and_exec_command("/workspace", ["python", malicious])
+    command = _copy_and_exec_command("/workspace", ["python", malicious], "65534:65534")
     assert command[-2:] == ["python", malicious]
     assert malicious not in command[2]
 
@@ -145,7 +276,10 @@ def test_copy_wrapper_does_not_evaluate_model_arguments() -> None:
 def _local_copy_wrapper_command(
     source: Path, destination: Path, argv: list[str]
 ) -> list[str]:
-    command = _copy_and_exec_command(str(destination), argv)
+    getuid = getattr(os, "getuid", lambda: 0)
+    getgid = getattr(os, "getgid", lambda: 0)
+    user = f"{getuid()}:{getgid()}"
+    command = _copy_and_exec_command(str(destination), argv, user)
     script = command[2].replace("'/workspace-source'", json.dumps(str(source)))
     script = script.replace("'/workspace'", json.dumps(str(destination)))
     return [sys.executable, "-c", script, *command[3:]]

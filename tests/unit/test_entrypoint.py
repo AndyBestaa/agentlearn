@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import io
+import signal
 import sys
 
 from astercode import entrypoint
-from astercode.terminal import configure_utf8_output
+from astercode.terminal import configure_console_signals, configure_utf8_output
 
 
 def test_utf8_output_replaces_legacy_windows_code_pages(monkeypatch) -> None:
@@ -25,6 +26,20 @@ def test_utf8_output_replaces_legacy_windows_code_pages(monkeypatch) -> None:
     assert stderr.encoding == "utf-8"
     assert stdout_bytes.getvalue().decode("utf-8") == "AsterCode 对话模式"
     assert stderr_bytes.getvalue().decode("utf-8") == "工作区"
+
+
+def test_console_break_uses_keyboard_interrupt_handler(monkeypatch) -> None:
+    observed: list[tuple[object, object]] = []
+    monkeypatch.setattr(signal, "SIGBREAK", 21, raising=False)
+    monkeypatch.setattr(
+        signal,
+        "signal",
+        lambda signum, handler: observed.append((signum, handler)),
+    )
+
+    configure_console_signals()
+
+    assert observed == [(21, signal.default_int_handler)]
 
 
 def test_aster_without_arguments_forwards_chat(monkeypatch) -> None:

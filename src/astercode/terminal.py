@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import signal
 import sys
 from typing import TextIO
 
@@ -30,4 +31,12 @@ def configure_utf8_output() -> None:
     _normalize_output_stream(sys.stderr)
 
 
-__all__ = ["configure_utf8_output"]
+def configure_console_signals() -> None:
+    """Route Windows Ctrl-Break through the normal KeyboardInterrupt path."""
+
+    sigbreak = getattr(signal, "SIGBREAK", None)
+    if sigbreak is not None:
+        signal.signal(sigbreak, signal.default_int_handler)
+
+
+__all__ = ["configure_console_signals", "configure_utf8_output"]

@@ -707,7 +707,7 @@ def _prompt_approval(request: Mapping[str, Any]) -> dict[str, Any] | None:
     while True:
         try:
             choice = typer.prompt(choices, default="q").strip().lower()
-        except (KeyboardInterrupt, EOFError):
+        except (KeyboardInterrupt, EOFError, typer.Abort):
             return None
         if choice in {"q", "quit", "leave"}:
             return None
@@ -809,7 +809,7 @@ def chat(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), fake:
     while True:
         try:
             message = typer.prompt("你").strip()
-        except (KeyboardInterrupt, EOFError):
+        except (KeyboardInterrupt, EOFError, typer.Abort):
             console.print("\n已退出；不会启动新的工具调用。")
             return
         if not message:
@@ -1282,8 +1282,9 @@ def _minimal_config(root: Path) -> str:
 if __name__ == "__main__":
     # ``python -m astercode.cli`` is a public CLI path too; do not leave it as
     # an escape hatch around the strict workspace boundary.
-    from .terminal import configure_utf8_output
+    from .terminal import configure_console_signals, configure_utf8_output
 
     configure_utf8_output()
+    configure_console_signals()
     _STRICT_SHORTCUT = True
     app()
