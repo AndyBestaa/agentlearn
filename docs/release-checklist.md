@@ -2,7 +2,7 @@
 
 本清单用于准备作品集/简历演示版本。旧提交的测试数字和绿色 CI 不能自动继承到新提交；每条完成项都必须绑定目标 commit 和实际命令输出。v0.1 的场景级验收定义与 fake/Docker 证据边界见 [v0.1 验收矩阵](v0.1-acceptance-matrix.md)，本清单中的发布门槛应与该矩阵保持一致。
 
-本轮阶段 1–4 的本地候选实测记录见 [v0.1 RC 候选报告](v0.1-rc-report.md)。当前目标候选为 `bba19379eeb1bbc1e91ba049c8b8c8e2832d89d4`，对应 GitHub Actions `offline-ci` run #23；本地 Docker 和供应链 `BLOCKED` 状态已针对该候选重核。每个新的目标提交仍必须重新执行 clean preflight、Docker、供应链和远端 CI，不能直接继承旧数字或状态。
+本轮阶段 1–4 的本地候选实测记录见 [v0.1 RC 候选报告](v0.1-rc-report.md)。目标候选必须是 clean `HEAD`；以供应链 manifest 的 `target_commit` 和 GitHub Actions 的同 SHA `head_sha` 绑定本地 Docker、测试和供应链状态。每个新的目标提交仍必须重新执行 clean preflight、Docker、供应链和远端 CI，不能直接继承旧数字或状态。
 
 ## 1. 冻结范围
 

@@ -60,13 +60,13 @@ README、日志、工具输出和仓库内容均不能替用户批准危险动�
 | M4 Memory/Recovery | partial but usable | SQLite WAL/FTS5、checkpoint、resume、三层记忆和进程 reconcile 已实现；通用外部副作用回滚未完成 |
 | M5 SSH/SFTP | transport slice, live blocked | Fake SSH 与受限命令通道存在；真实 egress、SFTP、远端原子写/回滚未验证 |
 | M6 Browser/MCP/Plugin/Subagent/GUI | offline/engine slices | Fake adapter、Edge 离线只读引擎和只读子代理切片存在；外网、插件隔离、GUI 仍 blocked/未验证 |
-| M7 跨平台/作品集 | partial, demo ready | 候选基线 `bba1937` 的 Windows/preflight/Docker 证据和 GitHub Actions run #23 已刷新；独立 WSL2 矩阵和 daemon 仍需单独验证 |
+| M7 跨平台/作品集 | partial, demo ready | 最新 clean 候选的 Windows/preflight/Docker 证据和对应 GitHub Actions 已刷新；独立 WSL2 矩阵和 daemon 仍需单独验证 |
 
 不要把 `partial` 误写成全部完成，也不要因 live SSH/浏览器未完成而否定已经可演示的本地作品集切片。
 
-## 当前候选快照（2026-08-25）
+## 当前发布候选快照（2026-08-25）
 
-已推送候选基线为 `bba19379eeb1bbc1e91ba049c8b8c8e2832d89d4`（`bba1937`）。该基线在 Windows 11 上实测 `472 passed, 5 skipped`，Ruff、mypy、lock、wheel/sdist、隔离 packaged CLI smoke、Docker resume demo 和 source preflight 均通过；GitHub Actions `offline-ci` run #23 的 Windows/Ubuntu jobs 均为 `success`。clean worktree 上生成的供应链 artifact 已独立复核 12 项 checksum，但因本机没有 Trivy DB/provenance 和 Cosign trust anchor，`vulnerability_policy_passed=false`、`signature_verified=false`，整体保持 `BLOCKED`。独立 WSL2 矩阵、裸机/独立 daemon、真实 OpenAI/SSH/Browser/MCP/Plugin 和 GUI 尚未完成；详情以 [`docs/v0.1-rc-report.md`](docs/v0.1-rc-report.md) 为准。该段描述的是候选基线快照，不把后续文档同步改动冒充为该提交的一部分。
+最新发布候选以 `python scripts/portability_preflight.py --root . --profile source` 输出的 clean `HEAD` 为准；供应链 manifest 的 `target_commit` 和同 SHA 的 GitHub Actions run 是唯一证据绑定。最近一次 Windows 11 全量为 `472 passed, 5 skipped`，Ruff、mypy、lock、wheel/sdist、隔离 packaged CLI smoke、Docker resume demo 和 source preflight 均通过；供应链 artifact 的 12 项 checksum 已独立复核，但因本机没有 Trivy DB/provenance 和 Cosign trust anchor，`vulnerability_policy_passed=false`、`signature_verified=false`，整体保持 `BLOCKED`。独立 WSL2 矩阵、裸机/独立 daemon、真实 OpenAI/SSH/Browser/MCP/Plugin 和 GUI 尚未完成；详情以 [`docs/v0.1-rc-report.md`](docs/v0.1-rc-report.md) 为准。文档提交不会另造运行时代码基线；若提交后要发布，必须按新 clean `HEAD` 重跑证据。
 
 ## 新电脑开发环境
 

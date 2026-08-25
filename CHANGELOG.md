@@ -6,7 +6,7 @@
 
 ### Added
 
-- 当前候选基线 `bba1937` 已完成 Windows `472 passed, 5 skipped`、lint/type/lock/build/packaged smoke/Docker demo/preflight，以及 GitHub Actions `offline-ci` run #23（Windows/Ubuntu）验证；clean release artifact 已绑定该提交并独立校验 12 项 checksum。Trivy provenance 和 Cosign trust anchor 尚未配置，因此漏洞/签名 claims 继续保持 `BLOCKED`。
+- 最近一次 clean 候选已完成 Windows `472 passed, 5 skipped`、lint/type/lock/build/packaged smoke/Docker demo/preflight，以及匹配 target SHA 的 GitHub Actions（Windows/Ubuntu）验证；clean release artifact 已绑定 manifest 的 `target_commit` 并独立校验 12 项 checksum。Trivy provenance 和 Cosign trust anchor 尚未配置，因此漏洞/签名 claims 继续保持 `BLOCKED`。
 - 新增显式 `supply-chain verify` 证据流程：默认只使用本地 Docker daemon 和精确 RepoDigest，绑定 Git commit/配置 hash，生成字段级绑定的 Syft JSON/SPDX、工具版本及前后 SHA-256、Trivy DB 文件 inventory、分离日志和 `SHA256SUMS`；Trivy DB 更新必须通过 `--update-trivy-db` 单独开启，缺少可信 DB provenance 或预批准 Cosign 信任锚时发布门禁 fail-closed，`signature_verified`/`vulnerability_policy_passed` 保持 `false`。`doctor` 同时将工具 `DETECTED` 与实际证据 `NOT VERIFIED` 分开显示。
 - 交互体验增强：`chat` 新增 Claude Code 风格的 `/clear` 会话重置、Fake 模型的明确 key 状态和脱敏生命周期进度；宿主显示 provider/tool 的开始、重试和完成摘要，不输出结构化模型 JSON。长任务上下文改为保留用户锚点并按字符/条目有界压缩；新增 deterministic 多轮代码读取、精确审批、修改、验证和同 session follow-up 回归。
 - 新增根目录 `AI_AGENT_START.md` 作为跨模型、跨对话的稳定统一入口：下一开发助手只需先阅读该文件，即会按只读检查、权威文档路由、权限边界、开发循环和验证门恢复项目上下文；易过期的里程碑数字仍由 `HANDOFF.md` 和实施计划维护。
@@ -18,7 +18,7 @@
 - Windows 路径安全补齐真实 junction/reparse 回归：根外 junction 的读取拒绝；根内 junction 可只读但写入、创建、移动和删除均拒绝；junction 形式的工作区根也由严格启动校验拒绝。写路径现在逐段检查 symlink/junction/reparse traversal，`fs.move` 的源路径同样复核。
 - Windows 公开入口统一安装 `SIGBREAK`/Ctrl-Break 处理并把 Typer `Abort` 转为干净取消；真实子进程控制台注入回归无 traceback。新增宿主帮助进程 `os._exit` 后 Job `KILL_ON_JOB_CLOSE` 清理测试，以及 POSIX zombie 不再误报存活的回归。
 - WSL2 Ubuntu 独立 Python 3.12 venv 全量矩阵通过，包含 6 项真实 Docker/bash 沙箱测试。受控构建导出改为 Docker 管理的匿名卷：容器停止后宿主从 tar 流自行校验路径、类型、精确集合和大小，避免 Docker 直接写宿主目录；模型命令执行前显式核验所有 capability 集合为零。
-- GitHub Actions 的 Ubuntu job 现在拉取固定 RepoDigest 后，以 `ASTERCODE_REQUIRE_LIVE_DOCKER=1` 强制执行 Docker 沙箱回归；attestation 不可用时测试失败而不是跳过。历史提交 `0ff88d3` 的远端 jobs 已通过；当前候选 `bba1937` 的 run #23 也已通过，后续提交必须以各自 workflow 结果为准。
+- GitHub Actions 的 Ubuntu job 现在拉取固定 RepoDigest 后，以 `ASTERCODE_REQUIRE_LIVE_DOCKER=1` 强制执行 Docker 沙箱回归；attestation 不可用时测试失败而不是跳过。每个新提交必须以自身 `head_sha` 对应的 workflow 结果为准。
 - Windows 已通过 WinGet 安装 `cosign` 3.1.3、`syft` 1.51.0、`trivy` 0.74.0；AsterCode 仅从固定 WinGet/程序目录识别它们，不信任 PATH。Syft 本地 `python:3.12-slim` SBOM smoke 已通过；Trivy 首次漏洞数据库下载因网络过慢中止，Cosign 尚未取得可信签名身份证据。
 - 新增 `process.exec_export` 受控构建导出：模型必须列出最多 16 个相对普通文件并接受精确审批；受信容器包装器用 SETUID/SETGID 将构建命令降权，构建用户不能直接写宿主导出目录。仅在命令成功后按总字节上限复制，宿主复核无链接/无额外文件、计算 SHA-256 并原子发布到 `.astercode/artifacts/build_*`。真实 Docker 及 Fake 模型→审批→导出完整链路通过。
 - CLI `run`/`chat` 在 Ctrl-C 时输出明确取消信息；runtime 的 approval-resume 路径现在与初始 run 一样捕获取消并触发 host kill。集成测试在审批后启动真实长进程，再取消 resume，确认完整进程树退出且 registry 无活动记录。
@@ -88,7 +88,7 @@
 - Git executor 拒绝仓库级 `include/includeIf` 配置，强制禁用 hooks、外部 diff、commit/tag GPG signing、credential helper 和 askpass；恶意仓库 signing 配置回归通过。
 - Git P0 查询进一步拒绝 filter/diff/merge 外部驱动、fsmonitor 和外部 attributes/excludes 配置，设置 `GIT_NO_LAZY_FETCH=1` 并对 diff/show 禁用 external diff/textconv；通用 process/shell 也拒绝绕过受控 Git、SSH、network 和 delete 路径。
 - 修复首次公开 CI 暴露的跨平台差异：Linux mypy 通过运行时检查访问 Windows-only API 并保持 fail-closed；Windows 8.3 临时目录别名改用文件身份比较；GitHub Actions 升级到 Node 24 action 版本。
-- 历史交接快照（未绑定当前候选）：Windows 11 `441 passed, 5 skipped`，WSL2 Ubuntu `426 passed, 20 skipped`，WSL 强制 live Docker 回归 `6 passed`；这些数字保留用于变更记录，不作为当前候选发布证据。当前候选 `bba1937` 的实测与边界见 `docs/v0.1-rc-report.md`。
+- 历史交接快照（未绑定当前候选）：Windows 11 `441 passed, 5 skipped`，WSL2 Ubuntu `426 passed, 20 skipped`，WSL 强制 live Docker 回归 `6 passed`；这些数字保留用于变更记录，不作为当前候选发布证据。当前候选的实测与边界见 `docs/v0.1-rc-report.md`。
 
 ### Not verified / still blocked
 

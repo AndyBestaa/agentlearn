@@ -65,7 +65,7 @@ AsterCode 要保护：
 
 ## 离线安全回归范围
 
-当前 fake/replay 回归继续覆盖路径、审批、SSH、Browser、extension、memory、process registry、审计、SQLite、Provider、Git 和子代理边界。Docker 回归覆盖固定 run 参数、镜像摘要、恶意单一 argv、remote-daemon/proxy 环境清除、不可隐藏 `.git` 拒绝、复制一致性、容器身份、受控产物导出和 fail-closed 装配；Windows live 用例覆盖只读源码、临时写入不回传、`--network none`、超时/停止/恢复清理、模型进程零 capabilities，以及构建用户无法直接写导出区。候选基线 `bba1937` 的 Windows 全量为 `472 passed, 5 skipped`，GitHub Actions run #23 的 Windows/Ubuntu jobs 均通过；独立 WSL2 矩阵和裸机 daemon 尚未验证，skip 不算能力通过。
+当前 fake/replay 回归继续覆盖路径、审批、SSH、Browser、extension、memory、process registry、审计、SQLite、Provider、Git 和子代理边界。Docker 回归覆盖固定 run 参数、镜像摘要、恶意单一 argv、remote-daemon/proxy 环境清除、不可隐藏 `.git` 拒绝、复制一致性、容器身份、受控产物导出和 fail-closed 装配；Windows live 用例覆盖只读源码、临时写入不回传、`--network none`、超时/停止/恢复清理、模型进程零 capabilities，以及构建用户无法直接写导出区。最近一次 clean 候选的 Windows 全量为 `472 passed, 5 skipped`，匹配 target SHA 的 GitHub Actions Windows/Ubuntu jobs 均通过；独立 WSL2 矩阵和裸机 daemon 尚未验证，skip 不算能力通过。
 
 旧开发电脑的审计链快照（2026-08-23）曾为 `valid=true, entries=2741`；它不会迁移到 clean clone，也不代表管理员级不可篡改或固定容量。
 
