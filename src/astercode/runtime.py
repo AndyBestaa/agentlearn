@@ -147,6 +147,8 @@ def build_registry(
                 container_cpus=process.container_cpus,
                 container_tmpfs_bytes=process.container_tmpfs_bytes,
                 container_workspace_bytes=process.container_workspace_bytes,
+                artifacts_dir=config.storage.artifacts_dir,
+                artifact_max_bytes=config.security.artifact_max_bytes,
                 network_mode=config.security.network_mode.value,
                 max_output=process.max_output_bytes,
                 max_processes=process.max_processes,
@@ -667,6 +669,11 @@ class Orchestrator:
                     decision,
                     budget=configured_budget,
                 )
+            except asyncio.CancelledError:
+                # Ctrl-C can arrive while an approved action is running after
+                # an approval resume, not only during the initial run.  Route
+                # both paths through the same host-side kill and checkpoint.
+                result = await core.cancel(session_id)
             except Exception as exc:
                 # A crash may leave only the LangGraph saver state (the product
                 # checkpoint is written after a normal return).  Surface a safe

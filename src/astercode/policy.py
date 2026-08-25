@@ -222,7 +222,7 @@ class PolicyEngine:
             return RiskLevel.P0
         if name in {"fs.apply_patch", "fs.mkdir", "fs.move"}:
             return RiskLevel.P1
-        if name in {"process.exec", "shell.exec", "process.start"}:
+        if name in {"process.exec", "process.exec_export", "shell.exec", "process.start"}:
             return self._process_command_policy(name, arguments)[0]
         if name in {"process.send_input", "process.stop"}:
             return RiskLevel.P2
@@ -535,6 +535,15 @@ class PolicyEngine:
                     patch_contexts.append((str(checked.resolved), old))
             data["patch_paths"] = patch_paths
             paths.extend(patch_paths)
+        if tool == "process.exec_export":
+            checked_artifacts = canonicalize_authorized_path(
+                self.config.storage.artifacts_dir,
+                self.config.security.authorized_roots,
+                must_exist=False,
+                reject_unc=self.config.security.reject_unc_paths,
+            )
+            data["artifact_destination_root"] = str(checked_artifacts.resolved)
+            paths.append(str(checked_artifacts.resolved))
         if paths:
             data["real_paths"] = paths
         if precondition_targets:
@@ -640,7 +649,7 @@ class PolicyEngine:
                 normalized,
                 digest,
             )
-        if tool in {"process.exec", "shell.exec", "process.start"}:
+        if tool in {"process.exec", "process.exec_export", "shell.exec", "process.start"}:
             risk, process_denial = self._process_command_policy(tool, arguments)
             if process_denial is not None:
                 return PolicyDecision("deny", RiskLevel.P4, process_denial, normalized, digest)

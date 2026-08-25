@@ -360,6 +360,7 @@ def doctor(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False)) -> 
                 DockerSandboxUnavailable,
                 attest_docker_sandbox,
                 discover_trusted_docker,
+                discover_trusted_image_tool,
             )
 
             docker_cli = discover_trusted_docker()
@@ -393,6 +394,19 @@ def doctor(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False)) -> 
                 )
                 checks.append(("network enforcement", "ENFORCED", "Docker --network none probe passed"))
                 checks.append(("sandbox", "ENFORCED", detail))
+            for tool, purpose in (
+                ("cosign", "image signature verification"),
+                ("syft", "SBOM generation"),
+                ("trivy", "vulnerability scanning"),
+            ):
+                executable = discover_trusted_image_tool(tool)
+                checks.append(
+                    (
+                        purpose,
+                        "AVAILABLE" if executable is not None else "NOT VERIFIED",
+                        str(executable) if executable is not None else f"trusted {tool} executable not installed",
+                    )
+                )
         else:
             checks.append(("network enforcement", "BLOCKED", "no runtime-attested OS egress sandbox/allowlist adapter"))
             checks.append(("sandbox", "BLOCKED", "sandbox_backend is not an attested container adapter"))
@@ -454,7 +468,14 @@ def run_task(
         }.items()
         if value is not None
     }
-    result = _run_task_impl(task, root=_root(root), session_id=session_id, fake=fake, auto_approve=auto_approve, stream=stream, replay=replay, dry_run=dry_run, budget_overrides=budget_overrides)
+    try:
+        result = _run_task_impl(task, root=_root(root), session_id=session_id, fake=fake, auto_approve=auto_approve, stream=stream, replay=replay, dry_run=dry_run, budget_overrides=budget_overrides)
+    except KeyboardInterrupt:
+        console.print(
+            "\n已取消；AsterCode 已触发运行时清理，不会启动新的工具调用。",
+            style="yellow",
+        )
+        raise typer.Exit(code=130) from None
     console.print_json(json.dumps(result, ensure_ascii=False, default=str))
     if result.get("status") not in {"completed", "partial"}:
         raise typer.Exit(code=2)
@@ -856,6 +877,12 @@ def chat(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), fake:
                     stream=False,
                     strict_workspace=True,
                 )
+            except KeyboardInterrupt:
+                console.print(
+                    "\n本轮已取消；运行时清理完成后退出对话。",
+                    style="yellow",
+                )
+                return
             except (ConfigError, OSError, ValueError) as exc:
                 console.print(_terminal_safe(f"本轮失败：{exc}"), style="red", markup=False)
                 continue
@@ -1215,23 +1242,28 @@ def kill(root: Path = typer.Option(Path.cwd(), "--root", file_okay=False), clear
     if clear:
         storage.clear_kill_switch(); typer.echo("kill switch cleared")
     else:
+        from .tools.docker_process import DockerProcessTools
         from .tools.process import ProcessTools
 
         storage.set_kill_switch(reason="user command")
         stopped = 0
         unknown = 0
         for record in storage.list_active_processes():
-            expected = record.get("identity_token")
-            current = ProcessTools.process_identity(int(record["pid"]))
-            verified_stopped = current == "missing" or (
-                isinstance(expected, str)
-                and isinstance(current, str)
-                and current != expected
-            )
-            if not verified_stopped:
-                verified_stopped = ProcessTools.terminate_registered(
-                    int(record["pid"]), expected if isinstance(expected, str) else None
+            if record.get("backend_kind") == "docker_linux_container":
+                verified_stopped = DockerProcessTools.terminate_registered_record(record)
+            else:
+                expected = record.get("identity_token")
+                current = ProcessTools.process_identity(int(record["pid"]))
+                verified_stopped = current == "missing" or (
+                    isinstance(expected, str)
+                    and isinstance(current, str)
+                    and current != expected
                 )
+                if not verified_stopped:
+                    verified_stopped = ProcessTools.terminate_registered(
+                        int(record["pid"]),
+                        expected if isinstance(expected, str) else None,
+                    )
             storage.mark_process_stopped(
                 str(record["action_id"]),
                 status="stopped" if verified_stopped else "unknown",

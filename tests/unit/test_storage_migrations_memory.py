@@ -112,6 +112,40 @@ def test_each_legal_old_schema_version_migrates_to_current(
         connection.close()
 
 
+def test_v8_migration_marks_unidentifiable_active_process_unknown(
+    app_config: AppConfig,
+) -> None:
+    _create_versioned_database(app_config.storage.database_path, 7)
+    with sqlite3.connect(app_config.storage.database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO sessions(
+                session_id, workspace, goal, status, state_json, created_at, updated_at
+            ) VALUES ('legacy-session', 'workspace', 'goal', 'running', '{}', 'old', 'old')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO runtime_processes(
+                action_id, session_id, pid, host, status, created_at,
+                identity_token, argv_hash
+            ) VALUES ('legacy-process', 'legacy-session', 4242, 'local', 'active',
+                      'old', 'legacy-token', 'legacy-argv')
+            """
+        )
+
+    Storage(app_config.storage).initialize()
+
+    with sqlite3.connect(app_config.storage.database_path) as connection:
+        row = connection.execute(
+            """
+            SELECT status, backend_kind, backend_ref, backend_identity
+            FROM runtime_processes WHERE action_id='legacy-process'
+            """
+        ).fetchone()
+    assert row == ("unknown", None, None, None)
+
+
 def test_future_schema_is_rejected_without_mutating_database(
     app_config: AppConfig,
 ) -> None:
@@ -326,10 +360,17 @@ def test_runtime_process_registry_supports_reconcile(
 ) -> None:
     session = storage.create_session(str(app_config.project_root), "process test")
     registered = storage.register_process(
-        "action-process", session["session_id"], 4242, created_at="2026-01-01T00:00:00+00:00"
+        "action-process",
+        session["session_id"],
+        4242,
+        created_at="2026-01-01T00:00:00+00:00",
+        backend_kind="docker_linux_container",
+        backend_ref="astercode-" + "a" * 32,
+        backend_identity="sha256:" + "b" * 64,
     )
 
     assert registered["status"] == "active"
+    assert registered["backend_kind"] == "docker_linux_container"
     assert storage.list_active_processes(session["session_id"])[0]["pid"] == 4242
     assert storage.mark_process_stopped("action-process")["status"] == "stopped"
     assert storage.list_active_processes() == []

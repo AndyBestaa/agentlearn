@@ -18,7 +18,7 @@ from .lock import InterProcessFileLock, WorkspaceWriteLock
 from .models import ApprovalRequest, ApprovalStatus, CheckpointRecord, RiskLevel, SessionStatus, new_id, utc_now
 from .security import GENESIS_AUDIT_HASH, audit_entry_hash, redact_secrets
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 class MemoryConflictError(ValueError):
@@ -256,6 +256,23 @@ def _migration_7(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migration_8(connection: sqlite3.Connection) -> None:
+    columns = {
+        str(row[1])
+        for row in connection.execute("PRAGMA table_info(runtime_processes)").fetchall()
+    }
+    for name in ("backend_kind", "backend_ref", "backend_identity"):
+        if name not in columns:
+            connection.execute(f"ALTER TABLE runtime_processes ADD COLUMN {name} TEXT")
+    # v7 did not persist enough backend evidence to distinguish a Docker
+    # client from a generic local process.  Never claim those in-flight rows
+    # can be safely recovered after upgrade.
+    connection.execute(
+        "UPDATE runtime_processes SET status='unknown', stopped_at=? WHERE status='active'",
+        (utc_now().isoformat(),),
+    )
+
+
 _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     1: _migration_1,
     2: _migration_2,
@@ -264,6 +281,7 @@ _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     5: _migration_5,
     6: _migration_6,
     7: _migration_7,
+    8: _migration_8,
 }
 
 
@@ -443,6 +461,11 @@ _CRITICAL_SCHEMA_BY_VERSION: dict[int, dict[str, frozenset[str]]] = {
                 "expires_at",
                 "revoked_at",
             }
+        )
+    },
+    8: {
+        "runtime_processes": frozenset(
+            {"backend_kind", "backend_ref", "backend_identity"}
         )
     },
 }
@@ -802,6 +825,9 @@ class Storage:
         created_at: str | None = None,
         identity_token: str | None = None,
         argv_hash: str | None = None,
+        backend_kind: str | None = None,
+        backend_ref: str | None = None,
+        backend_identity: str | None = None,
     ) -> dict[str, Any]:
         """Persist the identity of an agent-created long-running process."""
 
@@ -819,6 +845,9 @@ class Storage:
                 or str(existing["host"]) != host
                 or existing["identity_token"] != identity_token
                 or existing["argv_hash"] != argv_hash
+                or existing["backend_kind"] != backend_kind
+                or existing["backend_ref"] != backend_ref
+                or existing["backend_identity"] != backend_identity
             ):
                 raise ValueError("action_id is already bound to a different process")
             if existing is not None:
@@ -827,10 +856,22 @@ class Storage:
                 """
                 INSERT INTO runtime_processes(
                     action_id, session_id, pid, host, status, created_at, stopped_at,
-                    identity_token, argv_hash
-                ) VALUES (?, ?, ?, ?, 'active', ?, NULL, ?, ?)
+                    identity_token, argv_hash, backend_kind, backend_ref,
+                    backend_identity
+                ) VALUES (?, ?, ?, ?, 'active', ?, NULL, ?, ?, ?, ?, ?)
                 """,
-                (action_id, session_id, pid, host, timestamp, identity_token, argv_hash),
+                (
+                    action_id,
+                    session_id,
+                    pid,
+                    host,
+                    timestamp,
+                    identity_token,
+                    argv_hash,
+                    backend_kind,
+                    backend_ref,
+                    backend_identity,
+                ),
             )
             row = conn.execute(
                 "SELECT * FROM runtime_processes WHERE action_id=?", (action_id,)

@@ -4,7 +4,7 @@
 
 AsterCode 是一个 local-first、可恢复、可审计、权限受控的终端编程代理。它以 LangGraph 作为工作流编排层，由宿主运行时提供受策略约束的文件、进程、Git、SSH 和可选浏览器工具。模型只能提出结构化工具调用；所有副作用都由宿主重新解析、授权、执行和记录。
 
-本文件保留 M0 目标和约束。当前 M0-M4 本地链路已扩展到 schema v7、stream/replay、dry-run、精确 session grants、跨进程 process registry/kill 和记忆 edit/conflict；M5-M6 已有 deterministic fake 垂直切片。依赖真实 Provider、SSH transport、Playwright、外部插件进程或 OS 沙箱/egress 的能力仍为 blocked/live-unverified，绝不把 fake 测试写成真实集成完成。
+本文件保留 M0 目标和约束。当前 M0-M4 本地链路已扩展到 schema v8、stream/replay、dry-run、精确 session grants、带 Docker backend identity 的跨进程 process registry/kill 和记忆 edit/conflict；M5-M6 已有 deterministic fake 垂直切片。依赖真实 Provider、SSH transport、Playwright、外部插件进程或通用 OS egress 的能力仍为 blocked/live-unverified，绝不把 fake 测试写成真实集成完成。
 
 ## 2. 默认项目参数
 

@@ -78,9 +78,13 @@ OpenAI client 固定 `https://api.openai.com/v1`，DeepSeek client 固定 `https
 - 浏览器 OS egress 防 SSRF、真实外网导航、下载、提交和登录态工作流；Playwright + Edge 目前只完成无网络引擎 smoke。
 - 原生桌面 GUI（默认关闭）。
 - MCP/plugin 的真实隔离子进程、来源下载和网络策略。
-- Docker 临时构建沙箱已完成 Windows 11 + Docker Desktop 现场切片：固定 RepoDigest、只读 root/宿主源码、隐藏状态/VCS/本机依赖、512 MiB 可写 tmpfs 副本、`--network none`、非 root、capabilities 全移除、no-new-privileges、PID/memory/CPU/tmpfs 限额，并由主动 probe attestation。固定复制器使用 Python `copytree` 与 `os.execvp`，模型 argv 不进入 shell；构建产物随容器删除。
-- AppContainer、Windows Sandbox/Hyper-V、产物受控导出、复制期间并发修改检测、镜像签名/SBOM/扫描和跨进程容器恢复仍未验证。
-- Linux 原生 Docker/bash、Windows junction/reparse point 和完整 Ctrl-C 实机矩阵。
+- Docker 临时构建沙箱已完成 Windows 11 + Docker Desktop 现场切片：固定 RepoDigest、只读 root/宿主源码、隐藏状态/VCS/本机依赖、512 MiB 可写 tmpfs 副本、`--network none`、非 root、capabilities 全移除、no-new-privileges、PID/memory/CPU/tmpfs 限额，并由主动 probe attestation。固定复制器使用 Python `copytree` 与 `os.execvp`，模型 argv 不进入 shell；执行前对源目录复制前后及临时副本做文件类型/链接目标/SHA-256 清单比对，变化或特殊文件会 fail-closed。构建产物随容器删除。
+- Docker process registry 保存容器名、AsterCode 标签和镜像 ID；跨执行器清理会重新 inspect 三项身份后才 `rm --force`，并现场验证不会只终止宿主 Docker CLI 而遗留容器。
+- `process.exec_export` 使用单独的受信包装器：包装器仅保留 SETUID/SETGID 以把模型命令降权到配置的非 root 用户；构建用户无法写宿主导出目录。命令成功后包装器才复制精确列出的普通文件，并由宿主复核文件集合、总大小和 SHA-256，再原子发布到 `.astercode/artifacts/build_*`。
+- AppContainer、Windows Sandbox/Hyper-V、镜像签名/SBOM/扫描和跨进程 Windows Job handle/POSIX 恢复仍未验证。
+- Linux 原生 Docker/bash、Windows junction/reparse point 和真实终端信号注入矩阵仍待完成；运行时审批恢复阶段的取消与进程树清理已通过集成回归。
+- WSL2 Ubuntu 2 已完成只读 Python 3.12/bash、项目挂载和 `compileall` smoke；它只证明兼容入口可访问，不证明 Linux 原生 Docker/网络/进程 cgroup 隔离。
+- `doctor` 通过固定安装路径探测 `cosign`、`syft`、`trivy`，缺失时显示 `NOT VERIFIED`；镜像 digest 固定不等于签名、SBOM 或漏洞扫描通过。
 
 这些能力没有 verified adapter 时必须保持 `blocked` 或 `LIVE INTEGRATION NOT VERIFIED`，不能仅靠 prompt 放行。
 
@@ -102,7 +106,7 @@ OpenAI client 固定 `https://api.openai.com/v1`，DeepSeek client 固定 `https
 
 ## Storage、memory 与 audit
 
-`Storage` 使用 SQLite WAL、busy timeout、跨进程迁移锁和显式 migrations，当前 `SCHEMA_VERSION = 7`：
+`Storage` 使用 SQLite WAL、busy timeout、跨进程迁移锁和显式 migrations，当前 `SCHEMA_VERSION = 8`：
 
 1. 基础 sessions/turns/messages/events/checkpoints/tool_calls/approvals/artifacts/memory/audit/runtime_flags。
 2. `ssh_hosts`。
@@ -124,7 +128,7 @@ OpenAI client 固定 `https://api.openai.com/v1`，DeepSeek client 固定 `https
 
 ## 取消、恢复与并发
 
-本地进程启动后立即写入 `runtime_processes`，包含 identity token；同一进程的取消和 CLI `kill` 会验证 PID 身份后终止完整树。Windows Job Object 会在恢复目标代码前完成分配，并在 stop 或 handle close 时终止其父子树；对应本机测试已通过。跨进程 registry 可以识别旧记录并报告 stopped/unknown，但进程崩溃后的跨进程 Job handle 恢复、POSIX 强制回收和远程进程树仍未完成现场矩阵。
+本地进程启动后立即写入 `runtime_processes`，包含 PID identity token；Docker 进程还保存 backend、容器名和镜像 ID。同一进程的取消和 CLI `kill` 会先验证 PID；Docker 则额外验证固定格式容器名、AsterCode 所有权标签和镜像 ID 后才删除。Windows 已现场验证跨执行器容器清理；Job Object 会在恢复目标代码前完成分配，并在 stop 或 handle close 时终止其父子树。跨进程 Job handle 恢复、POSIX 强制回收和远程进程树仍未完成现场矩阵。
 
 工作区写入使用 workspace lock；SQLite 连接使用 WAL 和 busy timeout。跨 session 的状态、审批和 memory 通过 session ID、workspace 和持久化绑定隔离。
 

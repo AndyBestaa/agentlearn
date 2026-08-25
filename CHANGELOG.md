@@ -6,6 +6,12 @@
 
 ### Added
 
+- Windows 已通过 WinGet 安装 `cosign` 3.1.3、`syft` 1.51.0、`trivy` 0.74.0；AsterCode 仅从固定 WinGet/程序目录识别它们，不信任 PATH。Syft 本地 `python:3.12-slim` SBOM smoke 已通过；Trivy 首次漏洞数据库下载因网络过慢中止，Cosign 尚未取得可信签名身份证据。
+- 新增 `process.exec_export` 受控构建导出：模型必须列出最多 16 个相对普通文件并接受精确审批；受信容器包装器用 SETUID/SETGID 将构建命令降权，构建用户不能直接写宿主导出目录。仅在命令成功后按总字节上限复制，宿主复核无链接/无额外文件、计算 SHA-256 并原子发布到 `.astercode/artifacts/build_*`。真实 Docker 及 Fake 模型→审批→导出完整链路通过。
+- CLI `run`/`chat` 在 Ctrl-C 时输出明确取消信息；runtime 的 approval-resume 路径现在与初始 run 一样捕获取消并触发 host kill。集成测试在审批后启动真实长进程，再取消 resume，确认完整进程树退出且 registry 无活动记录。
+- `doctor` 新增镜像供应链工具检查：仅从固定安装路径探测 `cosign`、`syft`、`trivy`，缺失时明确显示 `NOT VERIFIED`，不把固定 RepoDigest 宣称为签名、SBOM 或漏洞扫描通过。WSL2 Ubuntu 2 的 Python/bash、项目挂载和 `compileall` 只读 smoke 已通过；这不等同于 Linux 原生全量验收。
+- Docker 临时源码副本在执行命令前比较源目录复制前、复制后和临时副本三份清单；常规文件按 SHA-256、链接按目标、目录按类型核对，复制期间变化或特殊文件会 fail-closed。真实 Docker Python/bash、网络隔离、超时和 stop 回归继续通过。
+- SQLite schema v8 为 `runtime_processes` 增加 backend、容器名和镜像身份；cancel/kill 在重启后重新核对固定容器名、AsterCode 标签及镜像 ID，全部匹配才删除。Windows + Docker Desktop 已现场验证跨执行器终止不会遗留容器；同时修复已退出但尚未回收句柄的 Windows 进程被误判为存活。
 - Docker Linux 临时构建 sandbox：仅信任固定安装路径的 CLI，复核不可变 RepoDigest，主动 probe 后才装配。宿主源码只读挂载，固定 Python 复制器排除 `.astercode/.git/.venv/node_modules/cache` 后复制到 512 MiB tmpfs；模型 argv 通过 `os.execvp` 执行，不进入 shell。容器固定 `--network none`、只读 root、非 root、`cap-drop ALL`、no-new-privileges 和 PID/memory/CPU/tmpfs 限制。Python exec、临时写入不回传、compileall、网络阻断、状态隐藏、超时清理和 start/poll/stop 均已在本机验证。
 - 第一次真实 compileall smoke 因复制 `.venv` 达到 120 秒宿主超时，被正确标记 `unknown`；只读 reconcile 确认无残留容器和宿主改动。修复固定排除后，新 session `session_d8d98eaef8fe4e6882bf4691bfac7894` 在约 1.85 秒完成 `python -m compileall -q .`，退出码 0，临时写入上限和隔离元数据均进入工具证据。
 - 真实 DeepSeek→Function Call→精确 P3 审批→Docker process 垂直 smoke：session `session_46f7633fc2fe4277937777c167fc4413` 完成唯一一次 `python --version`，退出码 0、输出 `Python 3.12.14`，工具证据标记只读文件边界、隐藏 agent state、`network=none`、cap-drop/no-new-privileges 和资源限制。另一次 `python -c` 尝试按既有策略在执行前拒绝，证明 Docker 不是内联解释器策略绕过路径。
@@ -19,7 +25,7 @@
 - OpenAI 与 DeepSeek 的 SDK client 分别固定 `https://api.openai.com/v1` 和 `https://api.deepseek.com`，HTTP transport 使用 `trust_env=false`，拒绝环境 base URL/proxy 改写 Provider 网络路线；这不等于已实现通用 OS egress sandbox。
 - M2 授权工作区文件工具、结构化 process/shell、受控 Git、原子写入、artifact、进程树取消和临时 Git E2E。
 - M3 P0-P4 policy、精确审批绑定（action hash、路径/cwd、diff、nonce、TTL、单次消费）、撤销、secret redaction、kill switch 和哈希链审计。
-- M4 SQLite WAL/FTS5、显式 schema migrations 与升级备份；当前 schema v7 包含 memory proposals、edit/conflict/supersedes、精确 session grants、runtime process registry、identity token 和 argv hash。
+- M4 SQLite WAL/FTS5、显式 schema migrations 与升级备份；当前 schema v8 包含 memory proposals、edit/conflict/supersedes、精确 session grants，以及带 PID/container/image 身份的 runtime process registry。
 - 配置版本化迁移：严格 `config_version=1`，`config migrate` 默认只预览；`--write` 先做逐字节备份、源身份/SHA-256 冲突检查，再 fsync/原子替换并回读校验。future version、旧字段冲突和环境变量持久化均 fail-closed。
 - 数据库 schema preflight：任何写连接、迁移锁或 DDL 前先只读检查，锁内再次复核；future/gap/伪造版本、关键表/列缺失和非 FTS5 `memory_fts` 不会触发迁移或写入。
 - M4 跨进程 checkpoint/审批恢复、stream/replay、`audit verify`、process registry/reconcile、memory namespace/TTL/置信度/敏感等级和渐进式检索。
@@ -64,7 +70,7 @@
 - Git executor 拒绝仓库级 `include/includeIf` 配置，强制禁用 hooks、外部 diff、commit/tag GPG signing、credential helper 和 askpass；恶意仓库 signing 配置回归通过。
 - Git P0 查询进一步拒绝 filter/diff/merge 外部驱动、fsmonitor 和外部 attributes/excludes 配置，设置 `GIT_NO_LAZY_FETCH=1` 并对 diff/show 禁用 external diff/textconv；通用 process/shell 也拒绝绕过受控 Git、SSH、network 和 delete 路径。
 - 修复首次公开 CI 暴露的跨平台差异：Linux mypy 通过运行时检查访问 Windows-only API 并保持 fail-closed；Windows 8.3 临时目录别名改用文件身份比较；GitHub Actions 升级到 Node 24 action 版本。
-- 最终全量回归：`382 passed, 10 skipped`；Docker 专项/现场为 `14 passed`；历史本机 Edge 离线 smoke 另为 `1 passed, 5 deselected`；skip 不视为能力通过。
+- 最终全量回归：`402 passed, 10 skipped`；历史本机 Edge 离线 smoke 另为 `1 passed, 5 deselected`；skip 不视为能力通过。
 
 ### Not verified / still blocked
 
@@ -74,8 +80,8 @@
 - Playwright + Edge 无网络引擎启动已验证；真实网络 egress/SSRF 防护、外网导航、下载和提交仍为 `LIVE INTEGRATION NOT VERIFIED`。
 - 原生桌面 GUI：默认关闭，未实现 live adapter。
 - MCP/plugin 真实隔离进程、来源下载和网络策略：Fake runner 不是生产隔离边界。
-- Windows Job Object 继续约束宿主 Docker CLI 进程树；Docker Desktop Linux 容器已提供只读宿主源码、临时可写构建区和 `network=none`。产物导出、镜像签名/扫描、跨进程恢复、复制并发一致性、SSH/Browser egress 和 Linux 原生矩阵仍未验证。
-- Linux 原生 bash/Docker、Windows junction/reparse point 完整矩阵、性能基线和完整 Ctrl-C 现场回归；PowerShell 7 已安装并通过 doctor，但 Docker shell 当前只支持 bash。
+- Windows Job Object 继续约束宿主 Docker CLI 进程树；Docker Desktop Linux 容器已提供只读宿主源码、临时可写构建区、复制一致性校验、跨执行器身份清理和 `network=none`。产物导出、镜像签名/扫描、跨进程 Job/POSIX 恢复、SSH/Browser egress 和 Linux 原生矩阵仍未验证。
+- Linux 原生 bash/Docker、Windows junction/reparse point、真实终端信号注入和跨进程 Job/POSIX 完整矩阵；PowerShell 7 已安装并通过 doctor，但 Docker shell 当前只支持 bash。
 - 本次 DeepSeek smoke 历史上曾暴露流式分片审计写放大、重复上下文导致的高 Token 使用，以及运行后 JSONL/SQLite 少一条记录；上述问题已通过 delta batching、context compaction、状态同步和审计镜像修复完成并回归。该历史 smoke 的 Token 与耗时仍不是 SLA 或成本承诺。
 
 ### Safety notes

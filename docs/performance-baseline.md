@@ -1,6 +1,6 @@
 # AsterCode 本地性能基线
 
-基线日期：2026-08-23（审计一致性修复后）。环境：Windows 11、CPython 3.12.12、本地临时 SQLite WAL；不使用 API key、网络或 SSH。
+基线日期：2026-08-24（schema v8 与 Docker 恢复加固后）。环境：Windows 11、CPython 3.12.12、本地临时 SQLite WAL；不使用 API key、网络或 SSH。
 
 运行命令：
 
@@ -12,9 +12,9 @@ uv run python scripts/performance_smoke.py
 
 | 项目 | 结果 |
 |---|---:|
-| 1 MiB 文本秘密脱敏 | 43.696 ms |
-| 新建并迁移 schema v7 | 119.464 ms |
-| 写入 100 个带 SQLite/JSONL 审计事件 | 6844.912 ms |
+| 1 MiB 文本秘密脱敏 | 37.890 ms |
+| 新建并迁移 schema v8 | 129.760 ms |
+| 写入 100 个带 SQLite/JSONL 审计事件 | 7642.526 ms |
 | 审计链验证 | 100 entries，valid=true |
 
 该脚本是回归烟雾测试，不是跨机器性能承诺。它在临时目录运行，阈值为 1 MiB 脱敏小于 2 秒、100 个审计事件小于 10 秒且哈希链有效。真实 Provider、网络、SSH、Playwright 和 Linux 性能不在该基线内。

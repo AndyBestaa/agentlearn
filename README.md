@@ -230,8 +230,10 @@ uv run astercode memory forget MEMORY_ID --root .
 ## 网络、SSH、浏览器与 GUI
 
 - 网络默认 `deny_by_default`。本机 Docker process/shell 使用 `--network none` 并通过主动连接失败探测；它只证明这些容器没有网络，不是浏览器、SSH 或宿主进程的通用 egress allowlist。未通过 Docker attestation 时 process/shell 即使获批也不会启动。
+- 普通 Docker 构建产生的文件默认随临时副本删除。需要保留产物时，模型必须调用独立的 `process.exec_export` 并列出精确相对文件；审批后构建仍以非 root 运行且不能直接写导出目录。只有成功命令的白名单普通文件会在大小与 SHA-256 复核后进入 `.astercode/artifacts/build_*`；目录、链接、额外文件和超出总预算的导出都会拒绝。
 - P0 Git 查询使用固定 Git 可执行文件和干净环境，设置 `GIT_NO_LAZY_FETCH=1`，避免 partial/promisor clone 在 status/diff/log/show/branch 中隐式联网；仓库配置若请求 filter/diff/merge 外部驱动、hooks、fsmonitor、外部 attributes/excludes 文件或 include 会在启动 Git 前拒绝，diff/show 同时禁用 external diff/textconv。这不把 Git push 变成 P0；push 仍是 P3 且网络边界未验证时 blocked。
 - 当前 Windows 主机已验证 WSL2、Docker Desktop Linux engine、PowerShell 7 和固定 Python 镜像。AppContainer/Windows Sandbox/Hyper-V 仍不是已验证路径；SSH、浏览器和其他真实网络能力继续保持 `BLOCKED`。
+- `astercode doctor` 还会检查固定安装路径下的 `cosign`、`syft`、`trivy`。当前 Windows 已通过 WinGet 安装并被 doctor 识别为 `AVAILABLE`；这只证明工具存在，不等于镜像签名、SBOM 或漏洞扫描证据已经完成。固定 digest 只能防标签漂移，不能替代这些供应链证据。
 - `authorized_ssh_hosts = []` 时，运行时代码拒绝所有真实 SSH。现已实现默认关闭的系统 OpenSSH 命令通道：只有 `security.ssh.enabled=true`、非空精确 allowlist 和宿主注入的可信网络边界同时满足时才会装配；它固定使用系统绝对路径、`BatchMode`、专用 strict `known_hosts`、SSH agent/keychain，并禁用密码、配置文件、代理跳转、转发、X11 和连接复用。配置指纹必须由专用 `known_hosts` 中唯一的精确 host:port 公钥推导一致。真实上传、下载、远程 stat 和原子写回滚尚未实现，真实主机也未连接验证，因此 live SSH 继续 `BLOCKED`。审批动作仍绑定完整主机配置与 `known_hosts` SHA-256；远端停止无法确认时报告 `unknown`。
 - `BrowserTools` 现有可选的 Playwright + Microsoft Edge 只读后端，始终使用非持久化 context，不复用用户 profile，并关闭 JavaScript、下载、权限和 Service Worker。每个请求和重定向都做 allowlist、DNS 私网/metadata 复核，但这只是纵深防御，不是 OS egress sandbox。本机只验证了 `about:blank` 无网络启动；正常 CLI 默认 `engine="disabled"`，且没有宿主网络证明时 policy 和 executor 都拒绝外网导航。真实下载和表单提交仍关闭；Fake Browser 继续用于确定性测试。
 - 原生桌面 GUI 默认关闭，当前没有可用 live 适配器。
@@ -244,7 +246,7 @@ SSH 详细说明见 [docs/ssh-test-environment.md](docs/ssh-test-environment.md)
 
 LangGraph 状态机为 `OBSERVE → PLAN → POLICY_CHECK → APPROVAL_GATE → TOOL_CALL → CAPTURE → VERIFY → CHECKPOINT`，结束状态为 `completed/partial/blocked/cancelled/failed`。工具统一返回 stdout/stderr、退出码、artifact、截断标志、副作用和错误。若进程 capture 因内存保留上限丢弃了输出后缀，artifact 会明确标记 `complete=false`、记录丢弃字节数并写入 incomplete marker；未保留的后缀不会被伪称已保存。artifact 自身超过磁盘预算时也会独立标记 `disk_complete=false`。
 
-SQLite 使用 WAL 和显式 schema migrations，当前 schema v7；包含 sessions、turns、messages、events、checkpoints、tool_calls、approvals、session grants、artifacts、memory、runtime_processes、ssh_hosts 和审计表。每次初始化在任何可写连接、迁移锁或 DDL 之前先用只读连接做 schema preflight，并在取得迁移锁后再次复核；future version、非连续/gap 历史、伪造版本记录、关键表或列缺失，以及 `memory_fts` 不是 FTS5 虚表都会直接拒绝且不改变数据库。JSONL/SQLite 审计带哈希链，可验证但不宣称能抵抗拥有操作系统管理员权限的外部修改：
+SQLite 使用 WAL 和显式 schema migrations，当前 schema v8；包含 sessions、turns、messages、events、checkpoints、tool_calls、approvals、session grants、artifacts、memory、runtime_processes、ssh_hosts 和审计表。v8 还持久化受控进程的 backend 类型、容器名和镜像身份，用于重启后精确核对并清理 AsterCode 创建的 Docker 容器。每次初始化在任何可写连接、迁移锁或 DDL 之前先用只读连接做 schema preflight，并在取得迁移锁后再次复核；future version、非连续/gap 历史、伪造版本记录、关键表或列缺失，以及 `memory_fts` 不是 FTS5 虚表都会直接拒绝且不改变数据库。JSONL/SQLite 审计带哈希链，可验证但不宣称能抵抗拥有操作系统管理员权限的外部修改：
 
 ```powershell
 uv run astercode audit verify --root .
@@ -270,9 +272,11 @@ uv run python scripts/live_chat_cycle_smoke.py --root C:\path\to\empty-test-work
 
 大多数自动化测试不需要 API key、真实网络或 SSH；使用 deterministic Fake Provider/adapter、临时 Git 仓库和 replay fixture。Docker live 测试使用固定摘要镜像，实际验证宿主源码只读、临时副本可写且不回传、生成目录排除、Python/compileall、隐藏 agent state、无网络、超时清理和 start/poll/stop。真实 DeepSeek session `session_d8d98eaef8fe4e6882bf4691bfac7894` 走通 Function Call → 精确审批 → 临时副本 `python -m compileall -q .` → 退出码 0；此前一次复制 `.venv` 的超时被标为 `unknown`，reconcile 确认无残留后才修复并新建 session 重试。该 smoke 不证明成本、远程操作或其他 live 权限安全。
 
-本轮最终全量回归结果为 `382 passed, 10 skipped`；Docker 专项与现场用例为 `14 passed`。真实 DeepSeek 非 Git 工作区对话回归 session `session_c004966b009d4c479562b714e0d3c56a` 通过聊天及两轮创建、修改、删除：7 个用户回合、6 次精确审批、7 次工具调用、6 次实际副作用，最终测试文件不存在。针对模型使用空字符串表示工作区根路径的现场复测 session `session_0925077d608240018fdb47a936e29a8a` 也已完成，且空路径只对只读文件工具安全映射，删除等副作用工具仍拒绝。内联命令恢复 session `session_038b35bb629348e4aa6f9ce66d30063e` 证明 `python -c` 不执行，模型随后自动改用已审查文件，经精确审批进入 Docker filesystem/network sandbox 并输出 `5`。同步后本地继续完成真实纯聊天、双轮增删改、Python 创建/修改/Docker 执行/上下文解释/删除、审批报告、删除后 not-found 验证和拒绝后继续；对应 sessions 为 `session_7d900a2b47fa47fabebcaf7f4752ba6a`、`session_39f6d00411c04cfb818d68768f36d7e4`、`session_6ca9afec1f89409c9a7efcd582f9b09b`、`session_64c92f4347234e82a332072a5eecfce1`。这些同步后的修复按当前要求仅保留本地。另有历史本机 Edge 离线 smoke `1 passed, 5 deselected`。skip 仍代表缺少相应平台/权限或 live 条件，不应解释成已通过。
+本轮最终全量回归结果为 `401 passed, 10 skipped`。新增测试覆盖受控构建产物导出、构建进程不能直接写导出目录、完整 Fake 模型审批链，以及审批后运行任务的取消与进程树清理。真实 DeepSeek 非 Git 工作区对话回归 session `session_c004966b009d4c479562b714e0d3c56a` 通过聊天及两轮创建、修改、删除：7 个用户回合、6 次精确审批、7 次工具调用、6 次实际副作用，最终测试文件不存在。针对模型使用空字符串表示工作区根路径的现场复测 session `session_0925077d608240018fdb47a936e29a8a` 也已完成，且空路径只对只读文件工具安全映射，删除等副作用工具仍拒绝。内联命令恢复 session `session_038b35bb629348e4aa6f9ce66d30063e` 证明 `python -c` 不执行，模型随后自动改用已审查文件，经精确审批进入 Docker filesystem/network sandbox 并输出 `5`。本地继续完成真实纯聊天、双轮增删改、Python 创建/修改/Docker 执行/上下文解释/删除、审批报告、删除后 not-found 验证和拒绝后继续；对应 sessions 为 `session_7d900a2b47fa47fabebcaf7f4752ba6a`、`session_39f6d00411c04cfb818d68768f36d7e4`、`session_6ca9afec1f89409c9a7efcd582f9b09b`、`session_64c92f4347234e82a332072a5eecfce1`。这些现场 session 只作为范围有限的证据，不代表外部 live 集成完成。另有历史本机 Edge 离线 smoke `1 passed, 5 deselected`。skip 仍代表缺少相应平台/权限或 live 条件，不应解释成已通过。
 
 ## 常见问题
+
+最新全量回归为 `402 passed, 10 skipped`；上方历史 smoke 段落中的旧数字仅保留为历史记录。
 
 - **没有 API key**：使用 `--fake` 或 `--replay`，这是受支持的离线模式。
 - **`provider-key UNSET`**：只影响真实模型调用，不影响离线测试。DeepSeek 使用 `DEEPSEEK_API_KEY`，OpenAI 使用 `OPENAI_API_KEY`，两者不会互相借用。

@@ -282,7 +282,7 @@ class LocalToolGateway:
                 # from the already-normalised ToolCall envelope and cannot be
                 # redirected by model-supplied arguments.
                 arguments["cwd"] = call.cwd
-            if call.tool in {"process.exec", "shell.exec", "process.start"} and approved_side_effect:
+            if call.tool in {"process.exec", "process.exec_export", "shell.exec", "process.start"} and approved_side_effect:
                 # This flag is host-generated only after an exact process-launch approval;
                 # it is never accepted from model-supplied arguments.
                 arguments["allow_unsandboxed"] = True
@@ -594,6 +594,12 @@ class LocalToolGateway:
             stopped = False
             if record.get("host") == "local":
                 for executor in executors:
+                    record_terminator = getattr(
+                        executor, "terminate_registered_record", None
+                    )
+                    if callable(record_terminator):
+                        stopped = bool(record_terminator(record))
+                        break
                     identity_reader = getattr(executor, "process_identity", None)
                     terminator = getattr(executor, "terminate_registered", None)
                     if identity_reader is None or terminator is None:
@@ -694,6 +700,38 @@ class LocalToolGateway:
         artifact_dir = self.storage.config.artifacts_dir
         self.storage.guard_artifacts_dir()
         artifact_dir.mkdir(parents=True, exist_ok=True)
+        if result.tool == "process.exec_export" and result.artifacts:
+            root = artifact_dir.resolve(strict=True)
+            artifact_ids: list[str] = []
+            for raw_path in result.artifacts:
+                candidate = Path(
+                    raw_path if isinstance(raw_path, str) else raw_path.path
+                )
+                if candidate.is_symlink() or bool(
+                    getattr(candidate, "is_junction", lambda: False)()
+                ):
+                    raise PermissionError("exported artifact cannot be a link or junction")
+                path = candidate.resolve(strict=True)
+                path.relative_to(root)
+                if path.is_symlink() or not path.is_file():
+                    raise PermissionError("exported artifact is not a regular stored file")
+                size = path.stat().st_size
+                if size > self.artifact_max_bytes:
+                    raise PermissionError("exported artifact exceeds the configured byte limit")
+                export_hasher = hashlib.sha256()
+                with path.open("rb") as stream:
+                    for block in iter(lambda: stream.read(1_048_576), b""):
+                        export_hasher.update(block)
+                artifact_ids.append(
+                    self.storage.save_artifact(
+                        session_id,
+                        str(path),
+                        size,
+                        export_hasher.hexdigest(),
+                        media_type="application/octet-stream",
+                    )
+                )
+            result.metadata["exported_artifact_ids"] = artifact_ids
         for label in ("stdout", "stderr"):
             value = getattr(result, label)
             capture = result.metadata.get("capture")
@@ -791,8 +829,23 @@ class LocalToolGateway:
                     host=call.host,
                     identity_token=identity if isinstance(identity, str) else None,
                     argv_hash=sha256_hex(canonical_json(call.arguments)),
+                    backend_kind=(
+                        str(result.metadata["process_tree_containment"])
+                        if isinstance(result.metadata.get("process_tree_containment"), str)
+                        else None
+                    ),
+                    backend_ref=(
+                        str(result.metadata["container_name"])
+                        if isinstance(result.metadata.get("container_name"), str)
+                        else None
+                    ),
+                    backend_identity=(
+                        str(result.metadata["container_image_id"])
+                        if isinstance(result.metadata.get("container_image_id"), str)
+                        else None
+                    ),
                 )
-        elif call.tool == "process.exec" and result.status is ToolStatus.UNKNOWN:
+        elif call.tool in {"process.exec", "process.exec_export"} and result.status is ToolStatus.UNKNOWN:
             pid = result.metadata.get("pid")
             identity = result.metadata.get("identity_token")
             process_handle = result.metadata.get("process_handle")
@@ -804,6 +857,21 @@ class LocalToolGateway:
                     host=call.host,
                     identity_token=identity if isinstance(identity, str) else None,
                     argv_hash=sha256_hex(canonical_json(call.arguments)),
+                    backend_kind=(
+                        str(result.metadata["process_tree_containment"])
+                        if isinstance(result.metadata.get("process_tree_containment"), str)
+                        else None
+                    ),
+                    backend_ref=(
+                        str(result.metadata["container_name"])
+                        if isinstance(result.metadata.get("container_name"), str)
+                        else None
+                    ),
+                    backend_identity=(
+                        str(result.metadata["container_image_id"])
+                        if isinstance(result.metadata.get("container_image_id"), str)
+                        else None
+                    ),
                 )
         if call.tool in {"process.poll", "process.stop"} and result.status is ToolStatus.COMPLETED:
             tracked_handle = call.arguments.get("action_id")
@@ -945,7 +1013,7 @@ class LocalToolGateway:
                         value, roots, cwd=effective_cwd, must_exist=must_exist, reject_unc=self.policy.config.security.reject_unc_paths
                     )
                     arguments[key] = str(checked.resolved)
-        elif call.tool.startswith("git.") or call.tool in {"process.exec", "process.start", "shell.exec"}:
+        elif call.tool.startswith("git.") or call.tool in {"process.exec", "process.exec_export", "process.start", "shell.exec"}:
             arguments["cwd"] = effective_cwd
         return call.model_copy(update={"cwd": effective_cwd, "arguments": arguments})
 

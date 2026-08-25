@@ -24,7 +24,7 @@ AsterCode 需要在没有 API key、真实 SSH、浏览器或外部网络的开�
    - 没有隔离子进程、固定来源和网络策略时，MCP/plugin live runner 只返回 blocked。
    - GUI 默认关闭。
 3. fake 适配器不得被标记为生产隔离边界。测试结果必须在报告中标为 offline/fake；真实集成缺少凭据时标为 `LIVE INTEGRATION NOT VERIFIED`。
-4. 将 schema v7、memory edit/conflict、session grants、stream/replay、process registry/kill 和 audit verify 作为本地安全垂直链路的一部分，先于 live 外部连接完成。
+4. 将 schema v8、memory edit/conflict、session grants、stream/replay、带 backend identity 的 process registry/kill 和 audit verify 作为本地安全垂直链路的一部分，先于 live 外部连接完成。
 
 ## 取舍与替代方案
 

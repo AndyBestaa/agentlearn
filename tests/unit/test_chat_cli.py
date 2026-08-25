@@ -565,3 +565,44 @@ def test_chat_can_grant_the_exact_p1_action_for_the_session(
     assert result.exit_code == 0, result.output
     assert decisions[0]["approved"] is True
     assert decisions[0]["scope"] == "session"
+
+
+def test_chat_ctrl_c_during_a_running_turn_exits_after_cleanup_message(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / ".astercode").mkdir()
+
+    def interrupted(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        del args, kwargs
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "_run_task_impl", interrupted)
+    result = CliRunner().invoke(
+        cli.app,
+        ["chat", "--root", str(tmp_path), "--fake"],
+        input="run a long test\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "本轮已取消" in result.output
+    assert "运行时清理完成后退出对话" in result.output
+
+
+def test_run_ctrl_c_returns_signal_exit_code_without_traceback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / ".astercode").mkdir()
+
+    def interrupted(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        del args, kwargs
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "_run_task_impl", interrupted)
+    result = CliRunner().invoke(
+        cli.app,
+        ["run", "long task", "--root", str(tmp_path), "--fake"],
+    )
+
+    assert result.exit_code == 130
+    assert "已触发运行时清理" in result.output
+    assert "Traceback" not in result.output

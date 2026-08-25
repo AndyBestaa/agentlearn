@@ -169,7 +169,7 @@ class _ProcessCapture:
 
 
 class ProcessTools:
-    specs = (
+    specs: tuple[ToolSpec, ...] = (
         ToolSpec("process.exec", "Execute a structured argv in an authorized cwd. Run reviewed workspace files such as ['python', 'add.py']; never use inline interpreter flags such as python -c, node -e, or ruby -e.", "process.exec", ("process_start",), "P2", timeout_seconds=120, idempotent=False, schema={"type": "object", "properties": {"argv": {"type": "array", "items": {"type": "string"}}, "cwd": {"type": "string"}, "timeout": {"type": "number", "minimum": 0.1}}, "required": ["argv", "cwd", "timeout"], "additionalProperties": False}),
         ToolSpec("shell.exec", "Execute a shell script only after explicit unsandboxed approval.", "process.shell", ("process_start",), "P2", timeout_seconds=120, idempotent=False, schema={"type": "object", "properties": {"script": {"type": "string"}, "dialect": {"type": "string", "enum": ["powershell", "pwsh", "bash"]}, "cwd": {"type": "string"}, "timeout": {"type": "number", "minimum": 0.1}}, "required": ["script", "dialect", "cwd", "timeout"], "additionalProperties": False}),
         ToolSpec("process.start", "Start an approved long-running argv and return a process handle.", "process.start", ("process_start",), "P2", timeout_seconds=30, idempotent=False, schema={"type": "object", "properties": {"argv": {"type": "array", "items": {"type": "string"}}, "cwd": {"type": "string"}}, "required": ["argv", "cwd"], "additionalProperties": False}),
@@ -740,6 +740,14 @@ class ProcessTools:
                 )
                 if not ok:
                     return None
+                exit_value = (int(exit_time.dwHighDateTime) << 32) | int(
+                    exit_time.dwLowDateTime
+                )
+                if exit_value != 0:
+                    # A terminated child can remain queryable until its parent
+                    # closes/reaps the process handle.  It is no longer a live
+                    # PID target and must not make recovery report an orphan.
+                    return "missing"
                 value = (int(creation.dwHighDateTime) << 32) | int(creation.dwLowDateTime)
                 return f"windows-filetime:{value}"
             finally:
