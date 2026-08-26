@@ -6,7 +6,7 @@
 
 ### Added
 
-- 上一已绑定 clean 候选（`target_commit=833e3aaf9920e3e426f651c7b634fbe8b0761bca`）已完成 Windows `472 passed, 5 skipped`、lint/type/lock/build/packaged smoke/Docker demo/preflight，以及匹配 target SHA 的 GitHub Actions（Windows/Ubuntu）验证；clean release artifact 已绑定 manifest 并独立校验 12 项 checksum。当前未提交工作树的 `511 passed, 5 skipped` 属于后续执行策略加固本地回归，尚未生成新的 clean 发布证据。Trivy provenance 和 Cosign trust anchor 尚未配置，因此漏洞/签名 claims 继续保持 `BLOCKED`。
+- 上一已绑定 clean 候选（`target_commit=833e3aaf9920e3e426f651c7b634fbe8b0761bca`）已完成 Windows `472 passed, 5 skipped`、lint/type/lock/build/packaged smoke/Docker demo/preflight，以及匹配 target SHA 的 GitHub Actions（Windows/Ubuntu）验证；clean release artifact 已绑定 manifest 并独立校验 12 项 checksum。后续执行策略加固已纳入 `main`，本机回归为 `511 passed, 5 skipped`；最终发布仍须在选定 clean `HEAD` 重新生成 manifest 并等待同 SHA CI。Trivy provenance 和 Cosign trust anchor 尚未配置，因此漏洞/签名 claims 继续保持 `BLOCKED`。
 - 新增显式 `supply-chain verify` 证据流程：默认只使用本地 Docker daemon 和精确 RepoDigest，绑定 Git commit/配置 hash，生成字段级绑定的 Syft JSON/SPDX、工具版本及前后 SHA-256、Trivy DB 文件 inventory、分离日志和 `SHA256SUMS`；Trivy DB 更新必须通过 `--update-trivy-db` 单独开启，缺少可信 DB provenance 或预批准 Cosign 信任锚时发布门禁 fail-closed，`signature_verified`/`vulnerability_policy_passed` 保持 `false`。`doctor` 同时将工具 `DETECTED` 与实际证据 `NOT VERIFIED` 分开显示。
 - 交互体验增强：`chat` 新增 Claude Code 风格的 `/clear` 会话重置、Fake 模型的明确 key 状态和脱敏生命周期进度；宿主显示 provider/tool 的开始、重试和完成摘要，不输出结构化模型 JSON。长任务上下文改为保留用户锚点并按字符/条目有界压缩；新增 deterministic 多轮代码读取、精确审批、修改、验证和同 session follow-up 回归。
 - 新增根目录 `AI_AGENT_START.md` 作为跨模型、跨对话的稳定统一入口：下一开发助手只需先阅读该文件，即会按只读检查、权威文档路由、权限边界、开发循环和验证门恢复项目上下文；易过期的里程碑数字仍由 `HANDOFF.md` 和实施计划维护。

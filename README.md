@@ -46,13 +46,13 @@ flowchart LR
 
 | 范围 | 证据 | 不能外推为 |
 | --- | --- | --- |
-| 上一已绑定 clean 发布候选（`833e3aaf9920e3e426f651c7b634fbe8b0761bca`） | Windows 11 `472 passed, 5 skipped`；Ruff、mypy、lock、构建、packaged CLI smoke、Docker Demo、clean preflight 和同 SHA 的 GitHub Actions 已通过；供应链证据按设计为 `BLOCKED` | 不包含当前工作树尚未提交的执行策略加固；独立 WSL2、裸机 Linux/独立 Docker daemon 和真实 live 集成仍未完成 |
+| 上一已绑定 clean 发布候选（`833e3aaf9920e3e426f651c7b634fbe8b0761bca`） | Windows 11 `472 passed, 5 skipped`；Ruff、mypy、lock、构建、packaged CLI smoke、Docker Demo、clean preflight 和同 SHA 的 GitHub Actions 已通过；供应链证据按设计为 `BLOCKED` | 不包含后来纳入 `main` 的执行策略加固；独立 WSL2、裸机 Linux/独立 Docker daemon 和真实 live 集成仍未完成 |
 | 历史 CI 快照 | 旧提交的 GitHub Actions 结果仅保留作历史记录 | 不代表当前 HEAD 的候选状态 |
 | Docker 本地执行切片 | 固定 RepoDigest、只读宿主源码、临时副本、无网络、非 root、capabilities 清零、资源限制与受控产物导出已有自动化验证 | 浏览器、SSH 或宿主进程的通用网络沙箱 |
 | DeepSeek 现场 smoke | 有范围有限的只读、文件增删改和 Docker 执行 session 证据 | 所有模型/账户、成本、长任务、真实 SSH 或生产部署 |
 | Fake SSH/Browser/MCP/Plugin | deterministic 自动化测试 | 真实远程主机、外网浏览器或生产插件隔离 |
 
-当前工作树不是 clean 发布候选：本地 `HEAD`/`origin/main` 仍为上述提交，但包含尚未提交的策略、进程和安全回归改动。当前本机重跑结果为 `511 passed, 5 skipped`，并通过 Ruff、mypy、compileall、锁文件/依赖检查、wheel/sdist 构建、packaged CLI smoke、Docker resume demo 和审计链核验；这些结果尚未绑定新的 manifest 或远程 CI，不能改写为发布证据。
+执行策略、进程工具描述和安全回归加固现已纳入 `main`。对应本机重跑结果为 `511 passed, 5 skipped`，并通过 Ruff、mypy、compileall、锁文件/依赖检查、wheel/sdist 构建、packaged CLI smoke、Docker resume demo 和审计链核验；最终发布仍须为选定 clean `HEAD` 生成新的 manifest，并以同 SHA 远程 CI 作为提交级证据。
 
 发布前必须按 [docs/release-checklist.md](docs/release-checklist.md) 在目标提交重新刷新测试数字。真实 OpenAI、SSH、浏览器外网、GUI 和插件进程隔离继续标记为 `LIVE INTEGRATION NOT VERIFIED` 或 `BLOCKED`。
 
@@ -371,7 +371,7 @@ uv run python scripts/live_chat_cycle_smoke.py --root C:\path\to\empty-test-work
 
 大多数自动化测试不需要 API key、真实网络或 SSH；使用 deterministic Fake Provider/adapter、临时 Git 仓库和 replay fixture。Docker live 测试使用固定摘要镜像，实际验证宿主源码只读、临时副本可写且不回传、生成目录排除、Python/compileall、隐藏 agent state、无网络、超时清理和 start/poll/stop。真实 DeepSeek session `session_d8d98eaef8fe4e6882bf4691bfac7894` 走通 Function Call → 精确审批 → 临时副本 `python -m compileall -q .` → 退出码 0；此前一次复制 `.venv` 的超时被标为 `unknown`，reconcile 确认无残留后才修复并新建 session 重试。该 smoke 不证明成本、远程操作或其他 live 权限安全。
 
-上一已绑定 clean 发布候选（`target_commit=833e3aaf9920e3e426f651c7b634fbe8b0761bca`）的 Windows 11 实测为 `472 passed, 5 skipped`；`ruff check .`、`mypy src tests`、`uv lock --check`、wheel/sdist 构建、隔离环境 packaged CLI smoke、clean preflight、Windows 固定 Docker Demo 和匹配目标 SHA 的 GitHub Actions 均已通过。当前工作树的 `511 passed, 5 skipped` 是未提交加固后的本地结果，不代表该 clean target 或远程 CI；独立 WSL2 矩阵和独立 Docker daemon 尚未刷新。供应链命令已生成绑定证据但因缺少可信 Trivy provenance/Cosign trust anchor 保持 `BLOCKED`。skip 只表示平台或显式 live 条件未满足，不计入已完成能力；每个新发布候选均以自身 target commit 的远端结果为最终依据。
+上一已绑定 clean 发布候选（`target_commit=833e3aaf9920e3e426f651c7b634fbe8b0761bca`）的 Windows 11 实测为 `472 passed, 5 skipped`；`ruff check .`、`mypy src tests`、`uv lock --check`、wheel/sdist 构建、隔离环境 packaged CLI smoke、clean preflight、Windows 固定 Docker Demo 和匹配目标 SHA 的 GitHub Actions 均已通过。后续已纳入 `main` 的执行策略加固本机结果为 `511 passed, 5 skipped`，它不代表上一 clean target；最终发布仍要绑定选定 clean `HEAD` 的 manifest 和远程 CI。独立 WSL2 矩阵和独立 Docker daemon尚未刷新；供应链命令因缺少可信 Trivy provenance/Cosign trust anchor 保持 `BLOCKED`。skip 只表示平台或显式 live 条件未满足，不计入已完成能力。
 
 现场 DeepSeek sessions 还覆盖过非 Git 工作区聊天、两轮创建/修改/删除、空工作区路径的安全绑定、拒绝内联解释器后改用已审查文件，以及 Docker 中运行 Python。它们只作为范围有限的兼容性证据，不代表外部 live 集成完成；可复现的公开主演示以不需要凭据的 `scripts/resume_demo.py` 为准。
 

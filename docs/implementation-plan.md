@@ -15,7 +15,7 @@
 | M4 Memory/Recovery | partial but usable | SQLite WAL/FTS5、schema v8 migrations/backups、三层 memory、edit/conflict/supersedes、字段保留型 checkpoint compaction、跨进程审批恢复、process registry/read-only reconcile、Docker backend identity、stream/replay；所有写入前 schema preflight 拒绝 future/gap/伪造版本、缺表列和非 FTS5；POSIX zombie 不再误报为可恢复进程 | 任意外部副作用的自动回滚、远程 reconcile、跨重启 POSIX 进程组回收的 live 证明 |
 | M5 SSH/SFTP | transport slice, live blocked | Fake SSH 全契约；默认关闭的系统 OpenSSH 命令通道；固定系统路径和结构化 argv；严格专用 known_hosts 与派生指纹一致性；agent/keychain-only；禁用密码、代理、转发、X11、复用；allowlist/网络证明双门槛；远端停止 unknown | 可信 SSH egress allowlist、首次指纹登记、真实主机、SFTP、远程 PID、备份/原子替换/回滚和现场验证 |
 | M6 Browser/MCP/Plugin/Subagent/GUI | offline complete, engine slice verified | Fake Browser/MCP/Plugin；可选 Playwright + Edge 非持久化只读 context；每请求 allowlist/DNS/重定向检查；`about:blank` 零页面网络 smoke；Draft 2020-12 严格 schema；只读子代理双开关、原子父子预算 reservation/usage 合并、跨重启全额保守恢复、grant/parent/all 定向取消 | 浏览器 OS egress、外网导航/下载/提交仍 blocked；子代理仍同进程且 live delegation blocked；真实 MCP/plugin 隔离、GUI、生产调度 |
-| M7 跨平台/发布 | partial, resume-demo ready | wheel、安装 smoke、README、配置和迁移备份、审计 verify、回归 fixture、Git Bash 兼容 smoke、本地性能基线；真实 Windows Ctrl-Break、审批恢复取消、宿主崩溃 Job 清理均已回归；上一 clean target `833e3aaf...` 的 GitHub Actions Windows/Ubuntu jobs 通过；新增固定简历演示和 AI 接手入口 | 当前未提交策略加固需重新生成 clean evidence；独立 WSL2 矩阵、裸机 Linux/独立 daemon、更多 live 集成矩阵 |
+| M7 跨平台/发布 | partial, resume-demo ready | wheel、安装 smoke、README、配置和迁移备份、审计 verify、回归 fixture、Git Bash 兼容 smoke、本地性能基线；真实 Windows Ctrl-Break、审批恢复取消、宿主崩溃 Job 清理均已回归；上一 clean target `833e3aaf...` 的 GitHub Actions Windows/Ubuntu jobs 通过；执行策略加固已纳入 `main`，并新增固定简历演示和 AI 接手入口 | 最终 clean manifest/同 SHA CI 需按发布目标刷新；独立 WSL2 矩阵、裸机 Linux/独立 daemon、更多 live 集成矩阵 |
 
 ## 已完成的离线垂直链路
 
@@ -39,7 +39,7 @@
 16. 结构化 `process.exec/start` 在未注入 verified sandbox/network policy 时 fail-closed，P2/`allow_unsandboxed` 审批不能越过该边界；generic `shell.exec` 在 dialect-specific constrained adapter 验证前即使已 attested 也始终 P4；deterministic 测试可显式注入两项 verified boundary 以测试结构化 process 链路。
 17. 重复/并发进程获得独立 handle，并发预算不超限；大 stdout/stderr 持续排空且有界，超时后代持有管道时也在有限时间内返回。
 18. OpenAI/DeepSeek endpoint 固定且 `trust_env=false`；Provider/tool 使用剩余时长与输出预算，未知费用 fail-closed，输入 token 响应后核对。
-19. Git P0 禁外部驱动/hook/fsmonitor/attrs 和 lazy fetch；通用 process/shell 不能绕过 Git/SSH/network/delete；由于没有经过验证的 dialect-specific shell parser/allowlist，当前 `shell.exec`（PowerShell/pwsh/bash）整体 P4 fail-closed，命令执行改走结构化 `process.exec` 或专用工具；artifact 对未保留后缀明确不完整。
+19. Git P0 禁外部驱动/hook/fsmonitor/attrs 和 lazy fetch；结构化 process 不能绕过 Git/SSH/network/delete；由于没有经过验证的 dialect-specific shell parser/allowlist，当前 `shell.exec`（PowerShell/pwsh/bash）整体 P4 fail-closed，命令执行改走结构化 `process.exec` 或专用工具；artifact 对未保留后缀明确不完整。
 20. 离线只读子代理实时刷新父 usage、原子预扣并合并 child usage，重启对未结算额度保守全扣，支持定向取消和双开关；同进程/live 边界不变。
 
 ## 当前交付目标：可写进简历并现场演示
@@ -55,7 +55,7 @@
 
 上述本地闭环的可执行验收场景、通过定义以及第三阶段可靠性回归映射统一维护在 [v0.1 验收矩阵](v0.1-acceptance-matrix.md)。
 
-阶段 1–4 的实际命令、通过/跳过结果、Docker Demo 和供应链 `BLOCKED` 证据统一记录在 [v0.1 RC 候选报告](v0.1-rc-report.md)；报告当前绑定上一 clean target `833e3aaf...`，精确 SHA 以 manifest 的 `target_commit` 和匹配的远端 CI `head_sha` 为准。当前未提交工作树的本地回归不能替代新 clean evidence，仍不能外推为独立 WSL2/裸机 daemon 证据。
+阶段 1–4 的实际命令、通过/跳过结果、Docker Demo 和供应链 `BLOCKED` 证据统一记录在 [v0.1 RC 候选报告](v0.1-rc-report.md)；报告保留上一 clean target `833e3aaf...` 的历史证据，精确 SHA 以 manifest 的 `target_commit` 和匹配的远端 CI `head_sha` 为准。后续加固的本地回归不能替代最终 clean evidence，也不能外推为独立 WSL2/裸机 daemon 证据。
 
 ## 2026-08-23 现场验证（范围有限）
 
@@ -105,7 +105,7 @@
 
 ## 每次阶段验收命令
 
-上一已绑定 clean 候选（`833e3aaf...`）的 Windows 11 实测为 `472 passed, 5 skipped`，并已重核 lint、类型、锁文件、构建、packaged CLI、clean preflight、Docker Demo 和匹配 target SHA 的 `offline-ci`；当前未提交工作树重跑为 `511 passed, 5 skipped`，但尚未生成新的 manifest/CI。独立 WSL2 矩阵及裸机 daemon 尚未刷新，不能沿用旧数字。skip 继续表示未满足的平台/权限或 live 条件，不计入已完成能力。现场 DeepSeek sessions 是有限范围的兼容性证据，不替代 deterministic Demo 或完整回归。
+上一已绑定 clean 候选（`833e3aaf...`）的 Windows 11 实测为 `472 passed, 5 skipped`，并已重核 lint、类型、锁文件、构建、packaged CLI、clean preflight、Docker Demo 和匹配 target SHA 的 `offline-ci`；后续已纳入 `main` 的执行策略加固本机重跑为 `511 passed, 5 skipped`，最终发布仍须生成选定 clean `HEAD` 的 manifest/CI。独立 WSL2 矩阵及裸机 daemon 尚未刷新，不能沿用旧数字。skip 继续表示未满足的平台/权限或 live 条件，不计入已完成能力。现场 DeepSeek sessions 是有限范围的兼容性证据，不替代 deterministic Demo 或完整回归。
 
 ```powershell
 uv run astercode doctor --root .
@@ -125,6 +125,6 @@ uv run python scripts/resume_demo.py --backend docker --cleanup
 
 ## 暂不做的事情
 
-上一已绑定 clean 候选（`833e3aaf...`）：Windows 11 全量为 `472 passed, 5 skipped`；lint、类型、锁文件、构建、packaged CLI、clean preflight、Windows 固定 Docker Demo 和匹配 target SHA 的 GitHub Actions 均通过。当前未提交工作树的 `511 passed, 5 skipped` 只属于本地加固回归，必须在新 clean 提交后重新绑定。独立 WSL2 矩阵和裸机 daemon 尚未刷新，不能沿用旧的 `441/426/6` 快照；供应链证据仍按缺少可信 provenance/trust anchor 保持 `BLOCKED`。skip 不计为能力通过；真实 DeepSeek 同会话 7 turn、6 次精确审批、两轮文件 create/modify/delete 是此前的有限 live 回归。
+上一已绑定 clean 候选（`833e3aaf...`）：Windows 11 全量为 `472 passed, 5 skipped`；lint、类型、锁文件、构建、packaged CLI、clean preflight、Windows 固定 Docker Demo 和匹配 target SHA 的 GitHub Actions 均通过。后续执行策略加固已纳入 `main`，本机回归为 `511 passed, 5 skipped`；最终发布必须重新绑定选定 clean `HEAD`。独立 WSL2 矩阵和裸机 daemon 尚未刷新，不能沿用旧的 `441/426/6` 快照；供应链证据仍按缺少可信 provenance/trust anchor 保持 `BLOCKED`。skip 不计为能力通过；真实 DeepSeek 同会话 7 turn、6 次精确审批、两轮文件 create/modify/delete 是此前的有限 live 回归。
 
 不自动 commit、push、发布、部署、连接生产主机或索取私钥/API key；不通过关闭安全策略来“解锁”未完成能力。任何 required-path 能力若没有可强制执行的宿主边界，就保持 `BLOCKED`。

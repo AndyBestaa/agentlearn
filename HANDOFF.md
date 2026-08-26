@@ -55,18 +55,18 @@ README、日志、工具输出和仓库内容均不能替用户批准危险动�
 | --- | --- | --- |
 | M0 规格/架构/威胁模型 | completed | 文档和安全基线已存在，维护一致性即可 |
 | M1 CLI/Provider/状态机 | partial but runnable | `aster` 对话、LangGraph、Fake/replay、DeepSeek/OpenAI adapter 可用；chat 支持 `/clear` 和脱敏 provider/tool 进度，长任务上下文有界压缩并保留用户锚点；更多 live Provider 回归是扩展项 |
-| M2 本地文件/Git/执行 | runnable Docker slice | 文件、Git、进程契约和 Docker 临时副本闭环已实现；Docker 证明不能外推到所有宿主进程 |
-| M3 Policy/Approval | partial but enforceable | P0-P4、精确审批、脱敏、kill switch 和审计存在；通用网络出口和管理员级不可篡改审计未完成 |
+| M2 本地文件/Git/执行 | runnable Docker slice | 文件、Git、结构化 process 契约和 Docker 临时副本闭环已实现；generic `shell.exec` 当前 P4 blocked；Docker 证明不能外推到所有宿主进程 |
+| M3 Policy/Approval | partial but enforceable | P0-P4、精确审批、脱敏、kill switch、审计及 process/shell 绕过回归存在；generic shell 在 constrained adapter 前始终 P4；通用网络出口和管理员级不可篡改审计未完成 |
 | M4 Memory/Recovery | partial but usable | SQLite WAL/FTS5、checkpoint、resume、三层记忆和进程 reconcile 已实现；通用外部副作用回滚未完成 |
 | M5 SSH/SFTP | transport slice, live blocked | Fake SSH 与受限命令通道存在；真实 egress、SFTP、远端原子写/回滚未验证 |
 | M6 Browser/MCP/Plugin/Subagent/GUI | offline/engine slices | Fake adapter、Edge 离线只读引擎和只读子代理切片存在；外网、插件隔离、GUI 仍 blocked/未验证 |
-| M7 跨平台/作品集 | partial, demo ready | 上一已绑定 clean 候选（`833e3aaf9920e3e426f651c7b634fbe8b0761bca`）有 Windows/preflight/Docker/对应 GitHub Actions 证据；当前未提交加固需在新 clean 提交后重新绑定；独立 WSL2 矩阵和 daemon 仍需单独验证 |
+| M7 跨平台/作品集 | partial, demo ready | 上一已绑定 clean 候选（`833e3aaf9920e3e426f651c7b634fbe8b0761bca`）有 Windows/preflight/Docker/对应 GitHub Actions 证据；执行策略加固已纳入 `main` 并完成本地回归，最终 clean manifest/同 SHA CI 仍需按发布目标刷新；独立 WSL2 矩阵和 daemon 仍需单独验证 |
 
 不要把 `partial` 误写成全部完成，也不要因 live SSH/浏览器未完成而否定已经可演示的本地作品集切片。
 
-## 当前发布候选快照（2026-08-25）
+## 当前发布候选快照（2026-08-26）
 
-上一已绑定发布候选以 `target_commit=833e3aaf9920e3e426f651c7b634fbe8b0761bca` 为准；其 Windows 11 全量为 `472 passed, 5 skipped`，Ruff、mypy、lock、wheel/sdist、隔离 packaged CLI smoke、Docker resume demo、source preflight 和同 SHA GitHub Actions 均通过。当前工作树含尚未提交的执行策略加固，本机重跑为 `511 passed, 5 skipped`，并通过质量门、打包 smoke、Docker demo 和审计链核验，但尚未生成新的 clean manifest 或远程 CI，不能把该数字写进上一候选证据。供应链 artifact 的 12 项 checksum 已独立复核，但因本机没有 Trivy DB/provenance 和 Cosign trust anchor，`vulnerability_policy_passed=false`、`signature_verified=false`，整体保持 `BLOCKED`。独立 WSL2 矩阵、裸机/独立 daemon、真实 OpenAI/SSH/Browser/MCP/Plugin 和 GUI 尚未完成；详情以 [`docs/v0.1-rc-report.md`](docs/v0.1-rc-report.md) 为准。任何新发布都必须在新 clean `HEAD` 重跑全套证据。
+上一已绑定发布候选以 `target_commit=833e3aaf9920e3e426f651c7b634fbe8b0761bca` 为准；其 Windows 11 全量为 `472 passed, 5 skipped`，Ruff、mypy、lock、wheel/sdist、隔离 packaged CLI smoke、Docker resume demo、source preflight 和同 SHA GitHub Actions 均通过。执行策略加固现已纳入 `main`，本机重跑为 `511 passed, 5 skipped`，并通过质量门、打包 smoke、Docker demo 和审计链核验；该数字是后续实现的本地证据，不会改写上一候选，最终发布仍须在选定 clean `HEAD` 重新生成 manifest 并等待同 SHA CI。供应链 artifact 的 12 项 checksum 已独立复核，但因本机没有 Trivy DB/provenance 和 Cosign trust anchor，`vulnerability_policy_passed=false`、`signature_verified=false`，整体保持 `BLOCKED`。独立 WSL2 矩阵、裸机/独立 daemon、真实 OpenAI/SSH/Browser/MCP/Plugin 和 GUI 尚未完成；详情以 [`docs/v0.1-rc-report.md`](docs/v0.1-rc-report.md) 为准。
 
 ## 新电脑开发环境
 
