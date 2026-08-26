@@ -47,7 +47,7 @@ deterministic Provider 固定的是“下一步提什么工具”，不是工具
 1. **问题**：LLM 能建议命令，但不能让提示词承担权限边界，也不能把“模型说成功”当成成功。
 2. **架构**：LangGraph 负责可恢复循环；Provider 只返回结构化 proposal；宿主 Policy/Gateway 重新校验参数并执行。
 3. **运行 Demo**：指出 baseline failed、一次精确 P3 approval/resume、Docker test passed、最小 Git diff 和 audit valid。
-4. **安全边界**：Docker 证明只覆盖本地 process/shell；SSH、浏览器外网、GUI 和真实插件隔离仍然 blocked。
+4. **安全边界**：Docker 证明只覆盖本地结构化 process；通用 `shell.exec` 在 dialect-specific constrained adapter 验证前保持 blocked。SSH、浏览器外网、GUI 和真实插件隔离仍然 blocked。
 5. **工程证据**：展示 GitHub Actions badge、目标提交的 Windows/WSL 测试、Ruff、mypy、构建与 packaged CLI smoke。
 
 建议现场原话：

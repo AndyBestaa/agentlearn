@@ -362,7 +362,7 @@ class ProcessTools:
     specs: tuple[ToolSpec, ...] = (
         ToolSpec(
             "process.exec",
-            "Execute a structured argv in an authorized cwd. Run reviewed workspace files such as ['python', 'add.py']; never use inline interpreter flags such as python -c, node -e, or ruby -e.",
+            "Execute a structured argv in an authorized cwd. Run reviewed workspace files such as ['python', 'add.py']; never use inline interpreter flags, module/import/file-loading flags, generic command wrappers, or PowerShell calls without -NoProfile/-NonInteractive.",
             "process.exec",
             ("process_start",),
             "P2",
@@ -381,10 +381,10 @@ class ProcessTools:
         ),
         ToolSpec(
             "shell.exec",
-            "Execute a shell script only after explicit unsandboxed approval.",
+            "General shell text is blocked until a dialect-specific constrained adapter is verified; use structured process.exec or a dedicated tool.",
             "process.shell",
             ("process_start",),
-            "P2",
+            "P4",
             timeout_seconds=120,
             idempotent=False,
             schema={

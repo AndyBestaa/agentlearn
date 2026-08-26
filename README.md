@@ -46,11 +46,13 @@ flowchart LR
 
 | 范围 | 证据 | 不能外推为 |
 | --- | --- | --- |
-| 当前 clean 发布候选 | Windows 11 `472 passed, 5 skipped`；Ruff、mypy、lock、构建、packaged CLI smoke、Docker Demo、clean preflight 和匹配当前 HEAD 的 GitHub Actions 已通过；供应链证据按设计为 `BLOCKED` | 独立 WSL2、裸机 Linux/独立 Docker daemon 和真实 live 集成仍未完成 |
+| 上一已绑定 clean 发布候选（`833e3aaf9920e3e426f651c7b634fbe8b0761bca`） | Windows 11 `472 passed, 5 skipped`；Ruff、mypy、lock、构建、packaged CLI smoke、Docker Demo、clean preflight 和同 SHA 的 GitHub Actions 已通过；供应链证据按设计为 `BLOCKED` | 不包含当前工作树尚未提交的执行策略加固；独立 WSL2、裸机 Linux/独立 Docker daemon 和真实 live 集成仍未完成 |
 | 历史 CI 快照 | 旧提交的 GitHub Actions 结果仅保留作历史记录 | 不代表当前 HEAD 的候选状态 |
 | Docker 本地执行切片 | 固定 RepoDigest、只读宿主源码、临时副本、无网络、非 root、capabilities 清零、资源限制与受控产物导出已有自动化验证 | 浏览器、SSH 或宿主进程的通用网络沙箱 |
 | DeepSeek 现场 smoke | 有范围有限的只读、文件增删改和 Docker 执行 session 证据 | 所有模型/账户、成本、长任务、真实 SSH 或生产部署 |
 | Fake SSH/Browser/MCP/Plugin | deterministic 自动化测试 | 真实远程主机、外网浏览器或生产插件隔离 |
+
+当前工作树不是 clean 发布候选：本地 `HEAD`/`origin/main` 仍为上述提交，但包含尚未提交的策略、进程和安全回归改动。当前本机重跑结果为 `511 passed, 5 skipped`，并通过 Ruff、mypy、compileall、锁文件/依赖检查、wheel/sdist 构建、packaged CLI smoke、Docker resume demo 和审计链核验；这些结果尚未绑定新的 manifest 或远程 CI，不能改写为发布证据。
 
 发布前必须按 [docs/release-checklist.md](docs/release-checklist.md) 在目标提交重新刷新测试数字。真实 OpenAI、SSH、浏览器外网、GUI 和插件进程隔离继续标记为 `LIVE INTEGRATION NOT VERIFIED` 或 `BLOCKED`。
 
@@ -78,7 +80,7 @@ uv run astercode doctor --root .
 
 状态文件默认在项目内 `.astercode/`，不会自动读取仓库 `.env`、PowerShell profile、bash rc 或个人 SSH 目录。
 
-本机 process/shell 还要求 WSL2、Docker Desktop Linux engine 和已固定的 Python 镜像。`astercode doctor` 只有在镜像摘要、只读源码、临时副本写入不回传、隐藏状态目录和 `--network none` 主动探测全部通过后才显示 `sandbox/network enforcement = ENFORCED`；否则继续 fail-closed。
+本机结构化 process 执行还要求 WSL2、Docker Desktop Linux engine 和已固定的 Python 镜像。`astercode doctor` 只有在镜像摘要、只读源码、临时副本写入不回传、隐藏状态目录和 `--network none` 主动探测全部通过后才显示 `sandbox/network enforcement = ENFORCED`；否则继续 fail-closed。通用 `shell.exec` 目前无论是否有审批都保持 blocked，直到 dialect-specific constrained adapter 完成验证。
 
 ### 从公司 Windows 电脑迁移到个人电脑
 
@@ -258,9 +260,9 @@ uv run astercode run "只读检查 README.md" --root . --max-rounds 3 --max-tool
 - **P3**：远程写入、commit/push、部署、sudo、服务启停、外部提交和敏感数据传输；逐项审批。
 - **P4**：递归删除、强制推送、生产迁移、IAM/防火墙、reboot 等；默认拒绝。
 
-提示词不是安全边界。`PolicyEngine` 和 `LocalToolGateway` 会重新按真实参数判定风险，工具或项目文件不能自我授权。P2 审批也不能替代 OS 边界：即使用户批准 `allow_unsandboxed`，普通 process/shell 在缺少经过验证的进程沙箱或网络策略时仍会被运行时代码拒绝。
+提示词不是安全边界。`PolicyEngine` 和 `LocalToolGateway` 会重新按真实参数判定风险，工具或项目文件不能自我授权。P2 审批也不能替代 OS 边界：即使用户批准 `allow_unsandboxed`，结构化 process 在缺少经过验证的进程沙箱或网络策略时仍会被运行时代码拒绝，generic shell 则在 constrained adapter 前始终 blocked。
 
-通用 `process.exec`/`process.start`/`shell.exec` 也不能代替受控工具：直接或经解释器、wrapper 调用 Git、SSH、网络/外部服务、删除、服务或机器控制命令会被重新判为 P4 并拒绝，必须走对应的窄工具和审批路径。
+通用 `process.exec`/`process.start`/`shell.exec` 也不能代替受控工具：直接或经解释器、wrapper 调用 Git、SSH、网络/外部服务、删除、服务或机器控制命令会被重新判为 P4 并拒绝，解释器的 inline/module/import/file-loading 形式、通用 wrapper，以及未显式关闭 profile 的 PowerShell 调用也始终 P4；必须走对应的窄工具和审批路径。由于 shell 文本无法在策略层完整解析，当前 `shell.exec`（PowerShell、pwsh、bash）整体 fail-closed，直到提供经过验证的 dialect-specific constrained adapter；请使用结构化 `process.exec` 直接调用经过审查的工作区文件或专用工具。
 
 查看当前策略：
 
@@ -325,7 +327,7 @@ uv run astercode memory forget MEMORY_ID --root .
 
 ## 网络、SSH、浏览器与 GUI
 
-- 网络默认 `deny_by_default`。本机 Docker process/shell 使用 `--network none` 并通过主动连接失败探测；它只证明这些容器没有网络，不是浏览器、SSH 或宿主进程的通用 egress allowlist。未通过 Docker attestation 时 process/shell 即使获批也不会启动。
+- 网络默认 `deny_by_default`。本机 Docker 的结构化 process 使用 `--network none` 并通过主动连接失败探测；它只证明这些容器没有网络，不是浏览器、SSH 或宿主进程的通用 egress allowlist。未通过 Docker attestation 时 process 即使获批也不会启动；通用 shell 文本当前始终 blocked。
 - 普通 Docker 构建产生的文件默认随临时副本删除。需要保留产物时，模型必须调用独立的 `process.exec_export` 并列出精确相对文件；审批后构建仍以非 root、零 capabilities 运行且不能直接写 root-only 导出区。只有成功命令的白名单普通文件会先进入 Docker 匿名卷，再由宿主从 tar 流逐项校验并在大小与 SHA-256 复核后发布到 `.astercode/artifacts/build_*`；越界路径、目录、链接、设备、重复/额外文件和超出总预算的导出都会拒绝。
 - P0 Git 查询使用固定 Git 可执行文件和干净环境，设置 `GIT_NO_LAZY_FETCH=1`，避免 partial/promisor clone 在 status/diff/log/show/branch 中隐式联网；仓库配置若请求 filter/diff/merge 外部驱动、hooks、fsmonitor、外部 attributes/excludes 文件或 include 会在启动 Git 前拒绝，diff/show 同时禁用 external diff/textconv。这不把 Git push 变成 P0；push 仍是 P3 且网络边界未验证时 blocked。
 - 当前 Windows 主机已验证 WSL2、Docker Desktop Linux engine、PowerShell 7 和固定 Python 镜像。AppContainer/Windows Sandbox/Hyper-V 仍不是已验证路径；SSH、浏览器和其他真实网络能力继续保持 `BLOCKED`。
@@ -369,7 +371,7 @@ uv run python scripts/live_chat_cycle_smoke.py --root C:\path\to\empty-test-work
 
 大多数自动化测试不需要 API key、真实网络或 SSH；使用 deterministic Fake Provider/adapter、临时 Git 仓库和 replay fixture。Docker live 测试使用固定摘要镜像，实际验证宿主源码只读、临时副本可写且不回传、生成目录排除、Python/compileall、隐藏 agent state、无网络、超时清理和 start/poll/stop。真实 DeepSeek session `session_d8d98eaef8fe4e6882bf4691bfac7894` 走通 Function Call → 精确审批 → 临时副本 `python -m compileall -q .` → 退出码 0；此前一次复制 `.venv` 的超时被标为 `unknown`，reconcile 确认无残留后才修复并新建 session 重试。该 smoke 不证明成本、远程操作或其他 live 权限安全。
 
-最近一次 clean 发布候选的 Windows 11 实测为 `472 passed, 5 skipped`；`ruff check .`、`mypy src tests`、`uv lock --check`、wheel/sdist 构建、隔离环境 packaged CLI smoke、clean preflight、Windows 固定 Docker Demo 和匹配目标 SHA 的 GitHub Actions 均已通过。独立 WSL2 矩阵和独立 Docker daemon 尚未刷新；供应链命令已生成绑定证据但因缺少可信 Trivy provenance/Cosign trust anchor 保持 `BLOCKED`。skip 只表示平台或显式 live 条件未满足，不计入已完成能力；每个发布候选均以自身 target commit 的远端结果为最终依据。
+上一已绑定 clean 发布候选（`target_commit=833e3aaf9920e3e426f651c7b634fbe8b0761bca`）的 Windows 11 实测为 `472 passed, 5 skipped`；`ruff check .`、`mypy src tests`、`uv lock --check`、wheel/sdist 构建、隔离环境 packaged CLI smoke、clean preflight、Windows 固定 Docker Demo 和匹配目标 SHA 的 GitHub Actions 均已通过。当前工作树的 `511 passed, 5 skipped` 是未提交加固后的本地结果，不代表该 clean target 或远程 CI；独立 WSL2 矩阵和独立 Docker daemon 尚未刷新。供应链命令已生成绑定证据但因缺少可信 Trivy provenance/Cosign trust anchor 保持 `BLOCKED`。skip 只表示平台或显式 live 条件未满足，不计入已完成能力；每个新发布候选均以自身 target commit 的远端结果为最终依据。
 
 现场 DeepSeek sessions 还覆盖过非 Git 工作区聊天、两轮创建/修改/删除、空工作区路径的安全绑定、拒绝内联解释器后改用已审查文件，以及 Docker 中运行 Python。它们只作为范围有限的兼容性证据，不代表外部 live 集成完成；可复现的公开主演示以不需要凭据的 `scripts/resume_demo.py` 为准。
 

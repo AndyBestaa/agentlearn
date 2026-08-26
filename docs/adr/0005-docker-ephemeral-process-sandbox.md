@@ -5,7 +5,7 @@
 
 ## 背景
 
-Windows Job Object 已证明进程树终止和部分资源限额，但不能隔离文件系统或网络。生产 `process.exec`/`shell.exec` 因此一直 fail-closed。当前主机已安装 WSL2、Docker Desktop Linux engine 和 PowerShell 7，可以实现并现场验证容器边界。
+Windows Job Object 已证明进程树终止和部分资源限额，但不能隔离文件系统或网络。生产结构化 `process.exec` 因此需要容器 attestation；generic `shell.exec` 因缺少 dialect-specific constrained adapter 仍始终 fail-closed。当前主机已安装 WSL2、Docker Desktop Linux engine 和 PowerShell 7，可以实现并现场验证结构化 process 的容器边界。
 
 ## 决策
 
@@ -28,7 +28,7 @@ Windows Job Object 已证明进程树终止和部分资源限额，但不能隔�
 
 ## 结果与边界
 
-正面：Python/bash 无网络验证与需要写缓存/构建产物的命令可在临时副本运行；宿主源码保持只读；源目录复制前后和副本内容通过 SHA-256 清单核对；容器退出即丢弃副本；超时和 stop 会删除容器并终止宿主 Docker CLI 树；持久化的容器名/标签/镜像身份允许重启后精确清理；`doctor` 能显示实际 attestation。
+正面：通过结构化 `process.exec` 调用已审查的 Python/bash 工作区文件，可在无网络临时副本中运行需要写缓存/构建产物的命令；宿主源码保持只读；源目录复制前后和副本内容通过 SHA-256 清单核对；容器退出即丢弃副本；超时和 stop 会删除容器并终止宿主 Docker CLI 树；持久化的容器名/标签/镜像身份允许重启后精确清理；`doctor` 能显示实际 attestation。generic `shell.exec` 不因该 Docker 证明而自动启用。
 
 受控导出：普通 `process.exec` 的临时写入仍全部丢弃。只有独立的 `process.exec_export` 在精确审批后允许列出最多 16 个相对普通文件。受信包装器只在读取 mode-0700 源快照、调整临时副本属主和降权时持有 `DAC_READ_SEARCH/CHOWN/SETUID/SETGID`；模型命令执行前显式清空并核验 effective/permitted/inheritable/ambient capabilities。成功后，包装器按总字节上限把白名单普通文件写入 root-only Docker 匿名卷。容器停止后宿主以 tar 流读取，不把容器直接写入宿主目录，并拒绝越界路径、链接、设备、重复或额外条目，计算 SHA-256 后原子发布。匿名卷随容器清理。
 

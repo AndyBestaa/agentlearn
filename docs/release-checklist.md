@@ -7,7 +7,7 @@
 ## 1. 冻结范围
 
 - [ ] 明确目标：local-first 代码读取/修改/测试/diff + policy/approval/resume/audit + Docker 演示。
-- [ ] 真实 SSH、外网 Browser、GUI、生产 MCP/Plugin 隔离继续标记 `LIVE INTEGRATION NOT VERIFIED` 或 `BLOCKED`。
+- [ ] 通用 `shell.exec` 在 dialect-specific constrained adapter 验证前继续标记 `BLOCKED`；真实 SSH、外网 Browser、GUI、生产 MCP/Plugin 隔离继续标记 `LIVE INTEGRATION NOT VERIFIED` 或 `BLOCKED`。
 - [ ] 不把 Fake adapter 结果写成真实连接，不把 Docker process 边界外推为 SSH/Browser egress。
 - [ ] 不在本轮顺带加入部署、push、远程写或生产凭据。
 

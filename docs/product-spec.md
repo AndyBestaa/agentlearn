@@ -12,7 +12,7 @@ AsterCode 是一个 local-first、可恢复、可审计、权限受控的终端�
 | --- | --- | --- |
 | `PRODUCT_NAME` | `AsterCode` | 现有项目名称未定义，采用默认名 |
 | `PROJECT_ROOT` | `C:\\Users\\MT\\langgraph-agent` | 专用项目目录；见 ADR-0001 |
-| `TARGET_OS` | Windows 11 + PowerShell 5.1/7 兼容；Linux + bash 目标 | 运行时检测并选择执行器 |
+| `TARGET_OS` | Windows 11 + PowerShell 5.1/7 兼容；Linux + bash 目标 | 结构化 `process.exec` 运行时检测并选择执行器；generic `shell.exec` 当前 blocked |
 | `MODEL_PROVIDER` | OpenAI Responses API + OpenAI Agents SDK（适配器） | 模型接口必须配置化 |
 | `MODEL_ID` | 配置/环境变量 | 禁止写死模型名或密钥 |
 | `AUTHORIZED_ROOTS` | 仅 `PROJECT_ROOT` | 真实路径校验后仍须位于该根内 |
@@ -27,7 +27,7 @@ AsterCode 是一个 local-first、可恢复、可审计、权限受控的终端�
 
 1. 阅读、搜索和理解授权工作区内的代码。
 2. 创建、编辑、移动和删除授权工作区内的文件，并保留可审计 diff。
-3. 受控执行 PowerShell/bash、构建、测试和开发服务器。
+3. 通过经过验证的执行器受控运行构建、测试和开发服务器；当前通用 `shell.exec` 因缺少 dialect-specific constrained parser/allowlist 保持 blocked，构建/测试应走结构化 `process.exec`。
 4. 通过安全包装器查看和操作 Git；提交、推送及危险操作分级审批。
 5. 在明确配置和审批后连接受信任 SSH 主机并执行窄范围操作。
 6. 提供隔离浏览器适配器；原生 GUI 默认关闭。
@@ -77,4 +77,4 @@ AsterCode 是一个 local-first、可恢复、可审计、权限受控的终端�
 
 ## 7. 里程碑摘要
 
-M0 需求/架构/威胁模型/ADR/计划；M1 CLI、配置、Provider 抽象、Fake Provider 和状态机；M2 文件/process/shell/Git 垂直链路；M3 策略、审批、沙箱、脱敏和 kill switch；M4 三层记忆、checkpoint、resume、有限上下文压缩；M5 SSH/SFTP；M6 浏览器、MCP/plugin、可选子代理；M7 跨平台硬化、打包、迁移、性能和安全回归。
+M0 需求/架构/威胁模型/ADR/计划；M1 CLI、配置、Provider 抽象、Fake Provider 和状态机；M2 文件/结构化 process/Git 垂直链路（通用 shell adapter 暂 blocked）；M3 策略、审批、沙箱、脱敏和 kill switch；M4 三层记忆、checkpoint、resume、有限上下文压缩；M5 SSH/SFTP；M6 浏览器、MCP/plugin、可选子代理；M7 跨平台硬化、打包、迁移、性能和安全回归。

@@ -6,7 +6,7 @@
 
 ### Added
 
-- 最近一次 clean 候选已完成 Windows `472 passed, 5 skipped`、lint/type/lock/build/packaged smoke/Docker demo/preflight，以及匹配 target SHA 的 GitHub Actions（Windows/Ubuntu）验证；clean release artifact 已绑定 manifest 的 `target_commit` 并独立校验 12 项 checksum。Trivy provenance 和 Cosign trust anchor 尚未配置，因此漏洞/签名 claims 继续保持 `BLOCKED`。
+- 上一已绑定 clean 候选（`target_commit=833e3aaf9920e3e426f651c7b634fbe8b0761bca`）已完成 Windows `472 passed, 5 skipped`、lint/type/lock/build/packaged smoke/Docker demo/preflight，以及匹配 target SHA 的 GitHub Actions（Windows/Ubuntu）验证；clean release artifact 已绑定 manifest 并独立校验 12 项 checksum。当前未提交工作树的 `511 passed, 5 skipped` 属于后续执行策略加固本地回归，尚未生成新的 clean 发布证据。Trivy provenance 和 Cosign trust anchor 尚未配置，因此漏洞/签名 claims 继续保持 `BLOCKED`。
 - 新增显式 `supply-chain verify` 证据流程：默认只使用本地 Docker daemon 和精确 RepoDigest，绑定 Git commit/配置 hash，生成字段级绑定的 Syft JSON/SPDX、工具版本及前后 SHA-256、Trivy DB 文件 inventory、分离日志和 `SHA256SUMS`；Trivy DB 更新必须通过 `--update-trivy-db` 单独开启，缺少可信 DB provenance 或预批准 Cosign 信任锚时发布门禁 fail-closed，`signature_verified`/`vulnerability_policy_passed` 保持 `false`。`doctor` 同时将工具 `DETECTED` 与实际证据 `NOT VERIFIED` 分开显示。
 - 交互体验增强：`chat` 新增 Claude Code 风格的 `/clear` 会话重置、Fake 模型的明确 key 状态和脱敏生命周期进度；宿主显示 provider/tool 的开始、重试和完成摘要，不输出结构化模型 JSON。长任务上下文改为保留用户锚点并按字符/条目有界压缩；新增 deterministic 多轮代码读取、精确审批、修改、验证和同 session follow-up 回归。
 - 新增根目录 `AI_AGENT_START.md` 作为跨模型、跨对话的稳定统一入口：下一开发助手只需先阅读该文件，即会按只读检查、权威文档路由、权限边界、开发循环和验证门恢复项目上下文；易过期的里程碑数字仍由 `HANDOFF.md` 和实施计划维护。
@@ -37,7 +37,7 @@
 - M1 Typer CLI、Pydantic 配置、LangGraph 状态机、预算、Fake Provider、replay fixture、OpenAI Agents SDK/Responses adapter 接口和脱敏流式事件。
 - DeepSeek Provider：使用官方 `https://api.deepseek.com` 上的 OpenAI 兼容 Chat Completions、`json_object` 结构化决策和 `DEEPSEEK_API_KEY` 引用；固定当前 Chat 模型 allowlist，严格校验 usage/唯一终态，流式路径在完整秘密检查后转发并忽略 `reasoning_content`，同时拒绝 Claude Code 的 `[1m]` 模型别名与 Anthropic 端点。
 - OpenAI 与 DeepSeek 的 SDK client 分别固定 `https://api.openai.com/v1` 和 `https://api.deepseek.com`，HTTP transport 使用 `trust_env=false`，拒绝环境 base URL/proxy 改写 Provider 网络路线；这不等于已实现通用 OS egress sandbox。
-- M2 授权工作区文件工具、结构化 process/shell、受控 Git、原子写入、artifact、进程树取消和临时 Git E2E。
+- M2 授权工作区文件工具、结构化 process（generic shell adapter 保持 blocked）、受控 Git、原子写入、artifact、进程树取消和临时 Git E2E。
 - M3 P0-P4 policy、精确审批绑定（action hash、路径/cwd、diff、nonce、TTL、单次消费）、撤销、secret redaction、kill switch 和哈希链审计。
 - M4 SQLite WAL/FTS5、显式 schema migrations 与升级备份；当前 schema v8 包含 memory proposals、edit/conflict/supersedes、精确 session grants，以及带 PID/container/image 身份的 runtime process registry。
 - 配置版本化迁移：严格 `config_version=1`，`config migrate` 默认只预览；`--write` 先做逐字节备份、源身份/SHA-256 冲突检查，再 fsync/原子替换并回读校验。future version、旧字段冲突和环境变量持久化均 fail-closed。
@@ -68,6 +68,7 @@
 
 ### Fixed
 
+- 修复通用执行绕过：由于 shell 文本没有经过验证的 dialect-specific parser/allowlist，策略现在对 PowerShell/pwsh/bash 的 `shell.exec` 全部按 P4 fail-closed；结构化解释器的 inline/module/import/file-loading flags、未关闭 profile 的 PowerShell 和通用 wrapper 也按 P4 拒绝，命令执行改用直接调用经过审查的工作区文件或专用工具。新增 Git/网络绕过回归覆盖 PowerShell 反引号、动态调用、Bash 转义/`eval`、紧连 flags、解释器别名和包装器。
 - 澄清跨 AI 开发交接语义：交接目标是让下一开发助手通过文档和代码地图读懂项目，不涉及为开发助手保存账号配置；`DEEPSEEK_API_KEY`/`OPENAI_API_KEY` 仅指 AsterCode 自己调用“大脑模型”的运行时凭据。
 - 修复跨机器开发时暴露的两处隐性环境耦合：审批终端单测显式使用 Fake Provider，不再取决于宿主是否配置真实 key；Windows 清洁进程环境从系统 API 获取 `SystemRoot`、`ProgramFiles` 和 `ProgramData`，固定 PowerShell 包查询的系统 cwd，并拒绝非本地系统盘，避免缺失 `%SystemDrive%` 展开时把 AppX 缓存写进工作区。
 - 对话终端将 `partial`/`blocked` 等内部状态显示为带原始枚举的中文含义，工具闭环完成时显示明确成功标记；`/status` 改为目标、预算、用量、下一步和阻塞原因的紧凑摘要，同时保留完整 JSON 查询命令。固定 Demo 只复制四个明确允许的 fixture 文件，不再被正常生成的 `__pycache__` 干扰。
@@ -83,10 +84,10 @@
 - 修复 `fs.apply_patch` 对模型宣称支持标准 unified diff、但执行器只识别 AsterCode patch envelope 的契约错位；ToolSpec/schema 现在给出精确 `*** Begin Patch` 格式和新建文件示例，Policy 与 Executor 复用同一解析器，无法绑定真实路径的格式会在审批前 fail-closed。真实 DeepSeek 临时空项目回归已走通 `fs.list → 精确路径审批 → fs.apply_patch → fs.read`，创建并核对 `hello.py`。
 - 修复 Windows 英文系统的旧终端代码页（例如 `cp1252`）无法输出中文欢迎语而崩溃的问题；所有公开 CLI 入口现在都会先规范化为 UTF-8，打包 smoke 会显式模拟 `cp1252` 回归。
 - 普通自然语言不再可能越过待审批 interrupt：已有 `waiting_approval` 的 session 必须提交绑定 approval id/action hash/nonce 的宿主终端决策；批准文本不进入模型上下文。快捷对话也拒绝静默授权用户主目录或磁盘根目录，并将状态、artifact 和浏览器下载位置强制限制在启动工作区。
-- 修复 `deny_by_default` 下 `allow_unsandboxed` 审批可能绕过未验证网络边界的问题。普通 process/shell 现在同时要求运行时证明进程沙箱和网络策略均已强制执行；审批不能替代任一 OS 边界。正常生产 CLI 不注入 verified boundary，只有 deterministic 测试或未来完成 attestation 的 host adapter 才能显式注入。
+- 修复 `deny_by_default` 下 `allow_unsandboxed` 审批可能绕过未验证网络边界的问题。结构化 process 现在同时要求运行时证明进程沙箱和网络策略均已强制执行；generic shell 在 constrained adapter 前始终 P4，审批不能替代任一 OS 边界。正常生产 CLI 不注入 verified boundary，只有 deterministic 测试或未来完成 attestation 的 host adapter 才能显式注入。
 - 修复 `process.send_input`/`process.stop` 审批后错误接收启动专用参数、重复 `process.start` 句柄碰撞、`communicate()` 无界内存、并发启动突破计数预算，以及 Job 分配失败后的稀有清理遗漏。
 - Git executor 拒绝仓库级 `include/includeIf` 配置，强制禁用 hooks、外部 diff、commit/tag GPG signing、credential helper 和 askpass；恶意仓库 signing 配置回归通过。
-- Git P0 查询进一步拒绝 filter/diff/merge 外部驱动、fsmonitor 和外部 attributes/excludes 配置，设置 `GIT_NO_LAZY_FETCH=1` 并对 diff/show 禁用 external diff/textconv；通用 process/shell 也拒绝绕过受控 Git、SSH、network 和 delete 路径。
+- Git P0 查询进一步拒绝 filter/diff/merge 外部驱动、fsmonitor 和外部 attributes/excludes 配置，设置 `GIT_NO_LAZY_FETCH=1` 并对 diff/show 禁用 external diff/textconv；结构化 process 也拒绝绕过受控 Git、SSH、network 和 delete 路径，generic shell 仍整体 blocked。
 - 修复首次公开 CI 暴露的跨平台差异：Linux mypy 通过运行时检查访问 Windows-only API 并保持 fail-closed；Windows 8.3 临时目录别名改用文件身份比较；GitHub Actions 升级到 Node 24 action 版本。
 - 历史交接快照（未绑定当前候选）：Windows 11 `441 passed, 5 skipped`，WSL2 Ubuntu `426 passed, 20 skipped`，WSL 强制 live Docker 回归 `6 passed`；这些数字保留用于变更记录，不作为当前候选发布证据。当前候选的实测与边界见 `docs/v0.1-rc-report.md`。
 
@@ -99,7 +100,7 @@
 - 原生桌面 GUI：默认关闭，未实现 live adapter。
 - MCP/plugin 真实隔离进程、来源下载和网络策略：Fake runner 不是生产隔离边界。
 - Windows Job Object 继续约束宿主 Docker CLI 进程树；Docker Desktop Linux 容器已提供只读宿主源码、临时可写构建区、复制一致性校验、跨执行器身份清理、受控产物导出和 `network=none`。镜像可信签名/完整漏洞扫描、跨重启 Job/POSIX 进程组恢复及 SSH/Browser egress 仍未验证。
-- WSL2 Ubuntu bash/Docker 全量矩阵、Windows 普通 symlink/junction/reparse point、真实 Ctrl-Break 和宿主异常退出 Job close 已验证；裸机 Linux/独立 daemon、PowerShell 7 Docker shell 与远程进程树仍未验证。
+- WSL2 Ubuntu bash/Docker 全量矩阵、Windows 普通 symlink/junction/reparse point、真实 Ctrl-Break 和宿主异常退出 Job close 已验证；通用 `shell.exec` 当前因缺少经过验证的 dialect-specific constrained adapter 保持 blocked，PowerShell structured process/Docker slice、裸机 Linux/独立 daemon 与远程进程树仍未验证。
 - 本次 DeepSeek smoke 历史上曾暴露流式分片审计写放大、重复上下文导致的高 Token 使用，以及运行后 JSONL/SQLite 少一条记录；上述问题已通过 delta batching、context compaction、状态同步和审计镜像修复完成并回归。该历史 smoke 的 Token 与耗时仍不是 SLA 或成本承诺。
 
 ### Safety notes

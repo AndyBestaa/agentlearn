@@ -31,27 +31,42 @@ _DEDICATED_OR_NETWORK_EXECUTABLES = frozenset(
     {
         "aws",
         "az",
+        "bitsadmin",
+        "certutil",
+        "cscript",
         "curl",
         "docker",
         "ftp",
         "gcloud",
         "git",
+        "git-lfs",
+        "gh",
         "helm",
+        "hg",
         "kubectl",
         "mysql",
+        "mshta",
         "nc",
         "ncat",
         "netcat",
         "podman",
         "pscp",
+        "psexec",
         "psql",
         "rsync",
+        "rundll32",
+        "regsvr32",
         "scp",
         "sftp",
         "sqlcmd",
         "ssh",
+        "schtasks",
+        "svn",
         "telnet",
+        "nmap",
         "wget",
+        "wmic",
+        "wscript",
     }
 )
 _MAX_PRECONDITION_FILE_BYTES = 67_108_864
@@ -91,34 +106,99 @@ _DESTRUCTIVE_EXECUTABLES = frozenset(
     }
 )
 _INLINE_INTERPRETERS = frozenset(
-    {"bash", "cmd", "node", "perl", "powershell", "pwsh", "python", "python3", "ruby", "sh", "zsh"}
+    {
+        "bash",
+        "bun",
+        "cmd",
+        "csh",
+        "dash",
+        "deno",
+        "fish",
+        "ipython",
+        "ipython3",
+        "jshell",
+        "ksh",
+        "lua",
+        "node",
+        "nodejs",
+        "perl",
+        "php",
+        "powershell",
+        "powershell_ise",
+        "pwsh",
+        "pypy",
+        "pypy3",
+        "py",
+        "pyw",
+        "python",
+        "python3",
+        "pythonw",
+        "ruby",
+        "sh",
+        "tcsh",
+        "zsh",
+    }
 )
 _COMMAND_WRAPPERS = frozenset(
     {
+        "busybox",
         "conda",
+        "chrt",
+        "command",
+        "doas",
         "env",
+        "exec",
+        "flatpak",
         "nice",
         "nohup",
         "npx",
+        "pkexec",
         "pipx",
         "poetry",
         "runas",
+        "runuser",
         "setsid",
         "start",
         "sudo",
+        "sudoedit",
         "timeout",
         "uv",
         "xargs",
     }
 )
 _INLINE_CODE_FLAGS = frozenset(
-    {"-c", "/c", "-e", "--eval", "-command", "-encodedcommand", "-enc"}
+    {"-c", "/c", "/k", "-e", "--eval", "-command", "-encodedcommand", "-enc"}
 )
+# These options load or evaluate code from a module/file/import path rather
+# than executing one explicitly reviewed workspace file.  They are kept
+# separate from the inline flags because their spelling and semantics differ
+# across Python, Node, Ruby, Perl and PowerShell.  A generic argv policy cannot
+# prove that the loaded code is reviewed, so all such forms fail closed.
+_CODE_LOADING_FLAGS = frozenset(
+    {
+        "-m",
+        "--module",
+        "-r",
+        "--require",
+        "--import",
+        "--loader",
+        "--experimental-loader",
+        "-p",
+        "--print",
+        "-file",
+        "-f",
+        "--file",
+        "--rcfile",
+        "--init-file",
+    }
+)
+_POWERSHELL_INTERPRETERS = frozenset({"powershell", "powershell_ise", "pwsh"})
 _SHELL_DEDICATED_PATTERN = re.compile(
     r"(?i)(?:^|[\s;&|()\"'/\\])(?:"
-    r"aws|az|curl|docker|ftp|gcloud|git|helm|invoke-restmethod|invoke-webrequest|irm|iwr|"
-    r"kubectl|mysql|nc|ncat|netcat|podman|pscp|psql|rsync|scp|sftp|sqlcmd|ssh|"
-    r"start-bitstransfer|telnet|wget"
+    r"aws|az|bitsadmin|certutil|cscript|curl|docker|ftp|gcloud|git(?:-lfs)?|gh|helm|hg|"
+    r"invoke-restmethod|invoke-webrequest|irm|iwr|kubectl|mshta|mysql|nc|ncat|netcat|"
+    r"nmap|podman|pscp|psexec|psql|rsync|rundll32|regsvr32|scp|schtasks|sftp|sqlcmd|"
+    r"ssh|start-bitstransfer|svn|telnet|wget|wmic|wscript"
     r")(?:\.exe|\.cmd|\.bat|\.com|\.ps1)?(?:$|[\s;&|()\"'])"
 )
 _SHELL_DESTRUCTIVE_PATTERN = re.compile(
@@ -172,6 +252,45 @@ class PolicyEngine:
                 break
         return name
 
+    @staticmethod
+    def _is_inline_code_flag(value: Any) -> bool:
+        if not isinstance(value, str):
+            return False
+        candidate = value.strip().casefold()
+        if not candidate:
+            return False
+        for flag in sorted(_INLINE_CODE_FLAGS, key=len, reverse=True):
+            if candidate == flag:
+                return True
+            if candidate.startswith(flag) and len(candidate) > len(flag):
+                # Accept both separated (``-c script``) and attached forms
+                # (``-cprint(1)``, ``-Command:git status``).  Being
+                # conservative here avoids a parser/quoting bypass.
+                return True
+        return False
+
+    @staticmethod
+    def _is_code_loading_flag(value: Any) -> bool:
+        """Return whether an interpreter argv token loads/evaluates code.
+
+        Both separated and attached forms are rejected (for example
+        ``python -m http.server`` and ``node --require=evil.js``).  The
+        policy deliberately errs toward a false positive: a generic process
+        call cannot establish that a module/import path was reviewed.
+        """
+
+        if not isinstance(value, str):
+            return False
+        candidate = value.strip().casefold()
+        if not candidate:
+            return False
+        for flag in _CODE_LOADING_FLAGS:
+            if candidate == flag or (
+                candidate.startswith(flag) and len(candidate) > len(flag)
+            ):
+                return True
+        return False
+
     @classmethod
     def _process_command_policy(
         cls, tool: str, arguments: Mapping[str, Any]
@@ -180,19 +299,23 @@ class PolicyEngine:
 
         General process tools must not be an alternate route around the Git,
         SSH, browser/network, filesystem-delete, service or machine-control
-        adapters.  Shell text cannot be parsed with complete fidelity, so it
-        starts at P3 and obvious boundary bypasses fail closed at P4.
+        adapters.  Shell text cannot be parsed with complete fidelity, so the
+        generic shell adapter remains fail-closed until a dialect-specific
+        constrained parser/allowlist is verified.
         """
 
         if tool == "shell.exec":
             script = arguments.get("script")
             if not isinstance(script, str):
                 return RiskLevel.P4, "shell script must be a string"
-            if _SHELL_DESTRUCTIVE_PATTERN.search(script):
-                return RiskLevel.P4, "destructive shell commands must use a dedicated constrained tool"
-            if _SHELL_DEDICATED_PATTERN.search(script):
-                return RiskLevel.P4, "Git, SSH, network and external-service commands cannot use shell.exec"
-            return RiskLevel.P3, None
+            dialect = arguments.get("dialect")
+            if dialect not in {"bash", "powershell", "pwsh"}:
+                return RiskLevel.P4, "shell dialect must be powershell, pwsh, or bash"
+            return (
+                RiskLevel.P4,
+                "general shell execution is disabled until a dialect-specific constrained "
+                "adapter is verified; use structured process.exec or a dedicated tool",
+            )
 
         argv = arguments.get("argv")
         if not isinstance(argv, (list, tuple)) or not argv:
@@ -206,14 +329,24 @@ class PolicyEngine:
             script = " ".join(str(item) for item in argv[1:])
             if _SHELL_DESTRUCTIVE_PATTERN.search(script) or _SHELL_DEDICATED_PATTERN.search(script):
                 return RiskLevel.P4, "inline shell commands cannot bypass dedicated constrained tools"
-            if any(str(item).strip().lower() in _INLINE_CODE_FLAGS for item in argv[1:]):
+            if any(cls._is_inline_code_flag(item) for item in argv[1:]):
                 return RiskLevel.P4, "inline interpreter code must use a separately reviewed constrained workflow"
+            if any(cls._is_code_loading_flag(item) for item in argv[1:]):
+                return RiskLevel.P4, "interpreter module/import loading must use a separately reviewed constrained workflow"
+            if program in {"bun", "deno"} and any(
+                str(item).strip().casefold() in {"eval", "run", "task", "test"}
+                for item in argv[1:]
+            ):
+                return RiskLevel.P4, "interpreter module/import loading must use a separately reviewed constrained workflow"
+            if program in _POWERSHELL_INTERPRETERS:
+                flags = {str(item).strip().casefold() for item in argv[1:]}
+                if "-noprofile" not in flags:
+                    return RiskLevel.P4, "PowerShell process calls must disable user profiles"
+                if "-noninteractive" not in flags:
+                    return RiskLevel.P4, "PowerShell process calls must be non-interactive"
             return RiskLevel.P3, None
         if program in _COMMAND_WRAPPERS:
-            wrapped = " ".join(str(item) for item in argv[1:])
-            if _SHELL_DESTRUCTIVE_PATTERN.search(wrapped) or _SHELL_DEDICATED_PATTERN.search(wrapped):
-                return RiskLevel.P4, "command wrappers cannot bypass dedicated constrained tools"
-            return RiskLevel.P3, None
+            return RiskLevel.P4, "generic command wrappers are disabled; invoke a reviewed executable directly"
         return RiskLevel.P2, None
 
     def classify(self, tool: str, arguments: Mapping[str, Any], declared: ToolSpec | Any | None = None) -> RiskLevel:

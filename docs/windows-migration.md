@@ -111,7 +111,7 @@ wsl --status
 docker version
 ```
 
-Docker 不是 Fake/replay 或普通对话的前提；但没有通过 attestation 的 Docker 时，不能声称 process/shell 沙箱或 Docker Demo 已验证。
+Docker 不是 Fake/replay 或普通对话的前提；但没有通过 attestation 的 Docker 时，不能声称结构化 process 沙箱或 Docker Demo 已验证。通用 `shell.exec` 在 dialect-specific constrained adapter 完成前始终 blocked。
 
 ## 4. 个人电脑：从公开仓库 clean clone
 

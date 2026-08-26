@@ -60,17 +60,17 @@ README、日志、工具输出和仓库内容均不能替用户批准危险动�
 | M4 Memory/Recovery | partial but usable | SQLite WAL/FTS5、checkpoint、resume、三层记忆和进程 reconcile 已实现；通用外部副作用回滚未完成 |
 | M5 SSH/SFTP | transport slice, live blocked | Fake SSH 与受限命令通道存在；真实 egress、SFTP、远端原子写/回滚未验证 |
 | M6 Browser/MCP/Plugin/Subagent/GUI | offline/engine slices | Fake adapter、Edge 离线只读引擎和只读子代理切片存在；外网、插件隔离、GUI 仍 blocked/未验证 |
-| M7 跨平台/作品集 | partial, demo ready | 最新 clean 候选的 Windows/preflight/Docker 证据和对应 GitHub Actions 已刷新；独立 WSL2 矩阵和 daemon 仍需单独验证 |
+| M7 跨平台/作品集 | partial, demo ready | 上一已绑定 clean 候选（`833e3aaf9920e3e426f651c7b634fbe8b0761bca`）有 Windows/preflight/Docker/对应 GitHub Actions 证据；当前未提交加固需在新 clean 提交后重新绑定；独立 WSL2 矩阵和 daemon 仍需单独验证 |
 
 不要把 `partial` 误写成全部完成，也不要因 live SSH/浏览器未完成而否定已经可演示的本地作品集切片。
 
 ## 当前发布候选快照（2026-08-25）
 
-最新发布候选以 `python scripts/portability_preflight.py --root . --profile source` 输出的 clean `HEAD` 为准；供应链 manifest 的 `target_commit` 和同 SHA 的 GitHub Actions run 是唯一证据绑定。最近一次 Windows 11 全量为 `472 passed, 5 skipped`，Ruff、mypy、lock、wheel/sdist、隔离 packaged CLI smoke、Docker resume demo 和 source preflight 均通过；供应链 artifact 的 12 项 checksum 已独立复核，但因本机没有 Trivy DB/provenance 和 Cosign trust anchor，`vulnerability_policy_passed=false`、`signature_verified=false`，整体保持 `BLOCKED`。独立 WSL2 矩阵、裸机/独立 daemon、真实 OpenAI/SSH/Browser/MCP/Plugin 和 GUI 尚未完成；详情以 [`docs/v0.1-rc-report.md`](docs/v0.1-rc-report.md) 为准。文档提交不会另造运行时代码基线；若提交后要发布，必须按新 clean `HEAD` 重跑证据。
+上一已绑定发布候选以 `target_commit=833e3aaf9920e3e426f651c7b634fbe8b0761bca` 为准；其 Windows 11 全量为 `472 passed, 5 skipped`，Ruff、mypy、lock、wheel/sdist、隔离 packaged CLI smoke、Docker resume demo、source preflight 和同 SHA GitHub Actions 均通过。当前工作树含尚未提交的执行策略加固，本机重跑为 `511 passed, 5 skipped`，并通过质量门、打包 smoke、Docker demo 和审计链核验，但尚未生成新的 clean manifest 或远程 CI，不能把该数字写进上一候选证据。供应链 artifact 的 12 项 checksum 已独立复核，但因本机没有 Trivy DB/provenance 和 Cosign trust anchor，`vulnerability_policy_passed=false`、`signature_verified=false`，整体保持 `BLOCKED`。独立 WSL2 矩阵、裸机/独立 daemon、真实 OpenAI/SSH/Browser/MCP/Plugin 和 GUI 尚未完成；详情以 [`docs/v0.1-rc-report.md`](docs/v0.1-rc-report.md) 为准。任何新发布都必须在新 clean `HEAD` 重跑全套证据。
 
 ## 新电脑开发环境
 
-Windows 推荐准备 Python 3.12+、Git、uv、PowerShell 7、WSL2 和 Docker Desktop Linux engine。Docker 只在真实 process/shell 演示和相关集成测试中必需。
+Windows 推荐准备 Python 3.12+、Git、uv、PowerShell 7、WSL2 和 Docker Desktop Linux engine。Docker 只在结构化 process 演示和相关集成测试中必需；通用 `shell.exec` 在 dialect-specific constrained adapter 验证前保持 blocked。
 
 ```powershell
 uv sync --extra dev --extra browser --frozen

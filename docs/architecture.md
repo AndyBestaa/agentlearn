@@ -12,7 +12,7 @@ flowchart TB
     M -->|结构化 proposal| O
     O --> P[PolicyEngine + Approval Gateway]
     P --> R[ToolRegistry<br/>JSON Schema / capability / risk / timeout]
-    R --> E[Executors<br/>fs / process / shell / git]
+    R --> E[Executors<br/>fs / process / git<br/>shell.exec blocked]
     E -->|ToolResult / diff / exit code| O
     O --> D[(SQLite WAL<br/>checkpoint / memory / audit / artifacts)]
     P --> D
@@ -84,7 +84,7 @@ OpenAI client 固定 `https://api.openai.com/v1`，DeepSeek client 固定 `https
 ### 已可离线验证
 
 - 文件：`fs.list/stat/read/search/apply_patch/mkdir/move/delete`。路径 canonicalize、根目录 allowlist、symlink 防逃逸、TOCTOU 身份复核、原子替换和精确 patch 已实现。
-- 进程：`process.exec/shell.exec/start/poll/send_input/stop`。默认结构化 argv、干净环境、不载入 profile/.env/Git hook。Windows 目标以 `CREATE_SUSPENDED` 创建，先加入 Job Object 再恢复，Job 启用 `KILL_ON_JOB_CLOSE`、树级 active-process、job-memory 和累计 user-mode CPU-time limit；POSIX 使用 process group。每次启动有唯一 `proc_...` 句柄，双流后台 capture 持续排空并有界保留。进程 registry 持久化 handle、PID、身份 token 和 argv hash，支持跨进程 kill/reconcile 记录。本机已通过父子树 Job close/`process.stop`、进程数/内存/CPU 限额和 assignment-failure marker 测试；Job Object 只提供树级生命周期/资源约束，不提供文件或网络隔离。
+- 进程：`process.exec/start/poll/send_input/stop`；通用 `shell.exec` 适配器保留为未启用的接口，直到有经过验证的 dialect-specific parser/allowlist。默认使用结构化 argv、干净环境、不载入 profile/.env/Git hook。Windows 目标以 `CREATE_SUSPENDED` 创建，先加入 Job Object 再恢复，Job 启用 `KILL_ON_JOB_CLOSE`、树级 active-process、job-memory 和累计 user-mode CPU-time limit；POSIX 使用 process group。每次启动有唯一 `proc_...` 句柄，双流后台 capture 持续排空并有界保留。进程 registry 持久化 handle、PID、身份 token 和 argv hash，支持跨进程 kill/reconcile 记录。本机已通过父子树 Job close/`process.stop`、进程数/内存/CPU 限额和 assignment-failure marker 测试；Job Object 只提供树级生命周期/资源约束，不提供文件或网络隔离。
 - Git：status/diff/log/show/branch/commit/push 包装；P0 查询拒绝 include、filter/diff/merge 外部驱动、hooks、fsmonitor、外部 attributes/excludes 文件，使用 `GIT_NO_LAZY_FETCH=1` 阻止 partial/promisor clone 隐式取对象，并为 diff/show 禁用 external diff/textconv。危险动作按 P3/P4 处理，未验证网络时 push fail-closed。
 - Fake SSH：内存 transport 覆盖 host-key 校验、exec/start/poll/stop、上传/下载/stat/close、SHA-256、超时 unknown 和 host key 变化。它是测试适配器，不是真实网络连接。真实审批的规范化 `ssh_target` 同时绑定配置 hostname/port/user/指纹、known_hosts 真实路径和文件 SHA-256；`ssh.start` 只确认远程句柄创建，不确认命令完成。`stop_all` 只返回明确确认停止的句柄；`close` 或 stop 无法确认时保留句柄并返回 `unknown`，供只读 reconcile。
 - Fake Browser：隔离的内存 fixture、域名和重定向 allowlist、DNS/私网/metadata 检查、受控下载和表单模拟；不打开 socket。
@@ -101,7 +101,7 @@ OpenAI client 固定 `https://api.openai.com/v1`，DeepSeek client 固定 `https
 - 浏览器 OS egress 防 SSRF、真实外网导航、下载、提交和登录态工作流；Playwright + Edge 目前只完成无网络引擎 smoke。
 - 原生桌面 GUI（默认关闭）。
 - MCP/plugin 的真实隔离子进程、来源下载和网络策略。
-- Docker 临时构建沙箱已完成 Windows 11 + Docker Desktop 及 WSL2 Ubuntu 测试切片：固定 RepoDigest、只读 root/宿主源码、隐藏状态/VCS/本机依赖、512 MiB 可写 tmpfs 副本、`--network none`、非 root、模型命令 capabilities 全为零、no-new-privileges、PID/memory/CPU/tmpfs 限额，并由主动 probe attestation。固定复制器使用逐项 Python 复制与 `os.execvp`，模型 argv 不进入 shell；执行前对源目录复制前后及临时副本做文件类型/链接目标/SHA-256 清单比对，变化或特殊文件会 fail-closed。普通构建产物随容器删除。
+- Docker 临时构建沙箱已完成 Windows 11 + Docker Desktop 及 WSL2 Ubuntu 测试切片：固定 RepoDigest、只读 root/宿主源码、隐藏状态/VCS/本机依赖、512 MiB 可写 tmpfs 副本、`--network none`、非 root、模型命令 capabilities 全为零、no-new-privileges、PID/memory/CPU/tmpfs 限额，并由主动 probe attestation。固定复制器使用逐项 Python 复制与 `os.execvp`，模型 argv 不进入 shell；执行前对源目录复制前后及临时副本做文件类型/链接目标/SHA-256 清单比对，变化或特殊文件会 fail-closed。普通构建产物随容器删除；这里的命令执行是结构化 `process.exec`，不是 generic `shell.exec`。
 - Docker process registry 保存容器名、AsterCode 标签和镜像 ID；跨执行器清理会重新 inspect 三项身份后才 `rm --force`，并现场验证不会只终止宿主 Docker CLI 而遗留容器。
 - `process.exec_export` 使用单独的受信包装器：包装器只在复制只读源码快照、调整临时副本属主和降权时持有 `DAC_READ_SEARCH/CHOWN/SETUID/SETGID`，模型命令启动前再次核对 effective/permitted/inheritable/ambient capabilities 全为零。构建用户不能写 root-only 导出区；成功后包装器才把精确列出的普通文件复制到 Docker 管理的匿名卷。容器停止后，宿主通过 `docker cp ... -` 接收 tar 流，自行拒绝越界路径、链接、设备、重复/额外条目和超限内容，计算 SHA-256 后原子发布到 `.astercode/artifacts/build_*`。
 - AppContainer、Windows Sandbox/Hyper-V、镜像签名/SBOM/扫描和跨进程 Windows Job handle/POSIX 恢复仍未验证。
@@ -123,7 +123,7 @@ OpenAI client 固定 `https://api.openai.com/v1`，DeepSeek client 固定 `https
 | P3 | 远程写、push、部署、sudo、外部提交 | 即时逐项审批 |
 | P4 | 递归删除、强推、生产/IAM/磁盘动作 | 默认 deny |
 
-通用 `process.exec`/`process.start`/`shell.exec` 不是逃生舱：策略检查程序名、解释器内联代码、wrapper 和 shell 文本，尝试绕过专用 Git、SSH、network/external-service、delete 或机器控制工具的动作直接按 P4 拒绝。当前 Docker adapter 只有在实际 probe 通过后才为 process policy 提供 sandbox/network attestation；配置字段和审批本身都不能提供证明。
+通用 `process.exec`/`process.start`/`shell.exec` 不是逃生舱：策略检查程序名、解释器 inline/module/import/file-loading 形式、wrapper 和 shell 文本，尝试绕过专用 Git、SSH、network/external-service、delete 或机器控制工具的动作直接按 P4 拒绝；通用 wrapper 本身保持 P4，PowerShell 还必须显式使用 `-NoProfile -NonInteractive`，不能代替直接调用经过审查的工作区文件。由于 shell 文本无法在策略层完整解析，当前没有经过验证的 dialect-specific constrained adapter，`shell.exec`（PowerShell、pwsh、bash）整体按 P4 fail-closed；复杂命令必须走结构化 `process.exec` 或专用工具。当前 Docker adapter 只有在实际 probe 通过后才为 process policy 提供 sandbox/network attestation；配置字段和审批本身都不能提供证明。
 
 审批持久化 `approval_id`、`action_id`、规范化动作 hash、cwd、真实路径、diff hash、主机指纹、过期时间和一次性 nonce。对于 SSH，动作 hash 的 `ssh_target` 还包含配置中的 hostname、port、user、配置指纹、known_hosts 规范化真实路径和当前文件 SHA-256；主机配置或信任文件任一变化都会使旧审批失效。消费、拒绝、撤销和跨进程恢复均校验绑定值。参数、路径、主机或 diff 变化会让旧审批失效。会话级授权只允许 P1/P2，并继续精确绑定同一 session 与动作 hash；P3/P4 不可获得会话级授权。
 
@@ -157,4 +157,4 @@ OpenAI client 固定 `https://api.openai.com/v1`，DeepSeek client 固定 `https
 
 ## 真实集成启用原则
 
-任何 live adapter 都必须先有独立的 OS/网络/凭据验证、最小 allowlist 和即时审批。运行时装配把 `verified_process_sandbox` 与 `verified_process_network_policy` 作为 attested adapter 的依赖注入点；正常生产 CLI 两者均保持 false，deterministic 测试可以显式注入 true 以测试执行链路。此前 `deny_by_default` 下 `allow_unsandboxed` 审批可能越过未验证网络边界的问题已经修复：现在进程沙箱和网络策略任一缺少验证，process/shell 都在 spawn 前 fail-closed。没有这些证据时，配置字段和审批只表达意图，不能放行执行。
+任何 live adapter 都必须先有独立的 OS/网络/凭据验证、最小 allowlist 和即时审批。运行时装配把 `verified_process_sandbox` 与 `verified_process_network_policy` 作为 attested adapter 的依赖注入点；正常生产 CLI 两者均保持 false，deterministic 测试可以显式注入 true 以测试结构化 process 链路。此前 `deny_by_default` 下 `allow_unsandboxed` 审批可能越过未验证网络边界的问题已经修复：现在进程沙箱和网络策略任一缺少验证，process 在 spawn 前 fail-closed；通用 `shell.exec` 在 constrained adapter 之前始终 P4。没有这些证据时，配置字段和审批只表达意图，不能放行执行。

@@ -20,11 +20,11 @@ AsterCode 要保护：
 | 威胁 | 示例 | 当前运行时控制 | 当前边界/证据 |
 | --- | --- | --- | --- |
 | 路径越界与 TOCTOU | `..`、symlink、junction、UNC 指向根外 | canonicalize、真实路径 allowlist、执行前 identity revalidate、原子写；写操作逐段拒绝 symlink/junction/reparse traversal | Windows 普通文件/目录 symlink 与真实 junction 的根外/根内/工作区根矩阵已通过；mount/bind 与并发替换仍需 OS sandbox |
-| 命令注入 | 文件名含 `;`、`$()`、PowerShell 子表达式 | 结构化 argv、默认不启用 shell、干净 PATH/profile、shell 明确标注 dialect | 无 verified 进程沙箱或网络策略时 process/shell 在 spawn 前 blocked；审批不能替代边界 |
-| 环境投毒 | profile、alias、Git hook、仓库同名可执行文件 | 不加载 profile/.env/hook，净化 PATH 和 Git 配置 | Linux/PowerShell 7 未现场验证 |
+| 命令注入 | 文件名含 `;`、`$()`、PowerShell 子表达式、反引号或调用运算符 | 结构化 argv、默认不启用 shell、干净 PATH/profile；当前没有经过验证的 dialect-specific constrained adapter，`shell.exec` 全部 fail-closed | 无 verified 进程沙箱或网络策略时 process 在 spawn 前 blocked；审批不能替代边界 |
+| 环境投毒 | profile、alias、Git hook、仓库同名可执行文件 | 不加载 profile/.env/hook，净化 PATH 和 Git 配置；结构化 PowerShell 还强制 `-NoProfile -NonInteractive`，通用 shell 仍整体 blocked | Linux/PowerShell 7 未现场验证 |
 | Provider 路线劫持 | `OPENAI_BASE_URL` 或 HTTP proxy 指向攻击者 | OpenAI/DeepSeek 固定官方 endpoint，SDK HTTP client `trust_env=false` | 只约束 Provider；通用 OS egress 仍未实现 |
 | Git P0 隐式执行/联网 | filter/diff driver、hook、fsmonitor、外部 attrs、lazy fetch | 启动前拒绝外部配置，隔离 hooks，禁 external diff/textconv，`GIT_NO_LAZY_FETCH=1` | 非 P0 push 仍需 P3，网络未验证时 blocked |
-| 通用进程绕过专用工具 | 用 shell/python/wrapper 执行 git/ssh/curl/rm | 检查程序、wrapper、内联代码和 shell 文本；Git/SSH/network/delete 绕过按 P4 拒绝 | 不能替代尚缺的 OS sandbox |
+| 通用进程绕过专用工具 | 用 shell/python/wrapper 执行 git/ssh/curl/rm，或用 PowerShell/Bash 动态语法、module/import/file-loading 形式改写命令 | 结构化 `process.exec` 检查已知专用程序、inline/module/import/file-loading flags；通用 wrapper 和 `shell.exec` 在 constrained adapter 验证前整体按 P4 拒绝 | 不能替代尚缺的 OS sandbox；任意项目脚本/未知可执行文件仍需结构化 argv、独立审批和运行时边界，不能声称静态名单穷尽所有语义 |
 | 提示注入 | README 要求上传密钥或关闭 host-key | 检测并标记来源；内容不会改变 policy 或审批 | 仍需持续增加恶意 fixture |
 | 秘密泄露 | stdout、异常、memory、replay 含 token | 输入/输出/事件/checkpoint/audit 统一 redaction；provider proposal 拒绝疑似秘密 | 无法防止进程自身绕过宿主并直接外传；网络默认关闭 |
 | 审批重放或替换 | 批准后改命令、cwd、diff、主机 | action hash、cwd/真实路径/diff hash/指纹/nonce/TTL、单次消费和撤销 | 管理员可直接改数据库不在应用防护范围 |
@@ -40,7 +40,7 @@ AsterCode 要保护：
 | 子代理预算/取消泄漏 | 并发 overbook、重启后重复预算、取消错误 child | 双开关、原子 reservation、父子 usage 合并、重启全额保守扣减、grant/parent/all 定向取消 | offline runner 仍同进程；live delegation blocked |
 | 进程逃逸 | 子进程留存、Ctrl-C 只杀父进程 | Windows Job Object 约束宿主 Docker CLI；容器 `--init`、唯一 name、force remove、PID limit；runtime identity/kill switch | exec timeout、start/poll/stop、跨执行器容器清理、审批恢复取消、真实 Ctrl-Break 和宿主崩溃 Job close 已确认；跨重启 Job handle/POSIX 进程组和远程进程树仍未完成 |
 | 构建产物越界 | 构建命令向宿主写额外文件、链接逃逸或填满磁盘 | 独立导出工具；降权构建用户不可写 root-only 匿名卷；最多 16 个相对普通文件；总字节上限；宿主从 tar 流复核路径、类型、精确集合和 SHA-256 | Windows 与 WSL Docker 现场及完整审批链已通过；目录/链接/设备/额外文件导出明确拒绝；Docker daemon/管理员仍在信任边界外 |
-| 网络 SSRF/外传 | redirect 到私网、metadata 或公网 | Docker process/shell 使用 `--network none` 且主动连接失败 probe；其他网络默认 deny；Browser 另做 allowlist/DNS 检查 | Docker 证明不覆盖 SSH/Browser/宿主；没有通用 allowlist egress adapter，live 网络工具保持 blocked |
+| 网络 SSRF/外传 | redirect 到私网、metadata 或公网 | Docker 结构化 process 使用 `--network none` 且主动连接失败 probe；通用 `shell.exec` 在 constrained adapter 前整体 blocked；其他网络默认 deny；Browser 另做 allowlist/DNS 检查 | Docker 证明不覆盖 SSH/Browser/宿主；没有通用 allowlist egress adapter，live 网络工具保持 blocked |
 | 容器供应链/daemon | 标签漂移、恶意镜像、Docker socket/远程 daemon | 固定 RepoDigest、受信 CLI 路径、不继承 DOCKER_HOST/context/config/proxy、不挂载 socket、cap-drop/no-new-privileges；doctor 将工具检测与证据状态分开；`supply-chain verify` 强制本地 Docker source，绑定 commit/config hash/digest，严格校验 Syft/Trivy 结构、DB `Version=2`/时间字段（当前 trivy-db v2 可省略 `Type`；存在时必须为整数 `1`）、文件 hash 和扫描前后稳定性 | 三项工具已检测；Syft 本地镜像 SBOM 可生成并保存，但 Trivy 文件 hash 只是 inventory、可信 DB provenance/策略可能缺失，Cosign 尚无可信签名身份/证据；缺少这些条件时发布门禁保持 BLOCKED；mirror cache 不自动扫描或修复漏洞；daemon、管理员威胁仍超出当前证明 |
 | SSH 劫持 | host key 变化、agent forwarding | 空 allowlist 直接拒绝；known_hosts 和指纹必须匹配；Fake backend 测试硬停止 | 真实 transport/host key 现场未验证 |
 | 恶意项目配置或状态 | 扩大根目录、诱导 live Provider/SSH、伪造 checkpoint 路径/预算、状态文件链接到外部 | 公共 CLI 严格绑定启动目录并重建安全配置；live Provider 只接受用户环境；reconcile 重验路径；恢复预算只可收窄；固定状态与配置拒绝 link/junction/hardlink | 内容文件 hardlink、mount/bind-mount 与跨进程 TOCTOU 仍需 OS sandbox；不要从不可信归档复制 `.astercode` |
@@ -53,7 +53,7 @@ AsterCode 要保护：
 
 - P0：工作区内只读和 Git 查询，自动允许。
 - P1：工作区内可逆写入，记录 diff；普通 CLI 默认审批。
-- P2：安装、网络、长期进程、未沙箱执行和越过普通边界，精确审批且可能因缺少强制边界而 blocked。审批只表达用户意图；进程沙箱和网络强制策略任一未通过运行时验证时，普通 process/shell 仍拒绝启动。
+- P2：安装、网络、长期进程、未沙箱执行和越过普通边界，精确审批且可能因缺少强制边界而 blocked。审批只表达用户意图；进程沙箱和网络强制策略任一未通过运行时验证时，结构化 process 仍拒绝启动，通用 shell 在 constrained adapter 前始终拒绝。
 - P3：远程写、push、部署、sudo、服务启停、外部提交和敏感数据传输，逐项即时审批。
 - P4：递归删除、强制推送、生产迁移、IAM、防火墙、reboot、磁盘操作，默认拒绝。
 
@@ -65,7 +65,7 @@ AsterCode 要保护：
 
 ## 离线安全回归范围
 
-当前 fake/replay 回归继续覆盖路径、审批、SSH、Browser、extension、memory、process registry、审计、SQLite、Provider、Git 和子代理边界。Docker 回归覆盖固定 run 参数、镜像摘要、恶意单一 argv、remote-daemon/proxy 环境清除、不可隐藏 `.git` 拒绝、复制一致性、容器身份、受控产物导出和 fail-closed 装配；Windows live 用例覆盖只读源码、临时写入不回传、`--network none`、超时/停止/恢复清理、模型进程零 capabilities，以及构建用户无法直接写导出区。最近一次 clean 候选的 Windows 全量为 `472 passed, 5 skipped`，匹配 target SHA 的 GitHub Actions Windows/Ubuntu jobs 均通过；独立 WSL2 矩阵和裸机 daemon 尚未验证，skip 不算能力通过。
+当前 fake/replay 回归继续覆盖路径、审批、SSH、Browser、extension、memory、process registry、审计、SQLite、Provider、Git 和子代理边界；新增 `tests/security/test_process_policy_bypass.py` 覆盖通用执行绕过。Docker 回归覆盖固定 run 参数、镜像摘要、恶意单一 argv、remote-daemon/proxy 环境清除、不可隐藏 `.git` 拒绝、复制一致性、容器身份、受控产物导出和 fail-closed 装配；Windows live 用例覆盖只读源码、临时写入不回传、`--network none`、超时/停止/恢复清理、模型进程零 capabilities，以及构建用户无法直接写导出区。上一已绑定 clean 候选（`833e3aaf...`）的 Windows 全量为 `472 passed, 5 skipped`，匹配 target SHA 的 GitHub Actions Windows/Ubuntu jobs 均通过；当前未提交工作树重跑为 `511 passed, 5 skipped`，尚未形成新的发布证据。独立 WSL2 矩阵和裸机 daemon 尚未验证，skip 不算能力通过。
 
 旧开发电脑的审计链快照（2026-08-23）曾为 `valid=true, entries=2741`；它不会迁移到 clean clone，也不代表管理员级不可篡改或固定容量。
 

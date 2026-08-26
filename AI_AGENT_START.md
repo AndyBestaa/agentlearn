@@ -36,7 +36,7 @@ python scripts/portability_preflight.py --root . --profile source
 4. [`docs/architecture.md`](docs/architecture.md) 与 [`docs/threat-model.md`](docs/threat-model.md)：模块关系及强制安全边界。
 5. [`docs/release-checklist.md`](docs/release-checklist.md)：候选提交需要重新执行的质量门。
 
-若要核对本轮阶段 1–4 的真实候选结果，再阅读 [`docs/v0.1-rc-report.md`](docs/v0.1-rc-report.md)；其中的数字只属于报告所绑定的当前工作树，不能跨提交继承。
+若要核对本轮阶段 1–4 的真实候选结果，再阅读 [`docs/v0.1-rc-report.md`](docs/v0.1-rc-report.md)；其中的数字只属于报告明确写出的 `target_commit`，不能跨提交继承。若工作树随后出现未提交改动，必须另行记录本地回归，不能把它们并入旧候选证据。
 
 如果工作区存在未提交修改，不要覆盖、删除、reset、clean、提交或暂存它们。先识别来源和范围，并向用户报告；只有得到明确指令后才能处理。
 
